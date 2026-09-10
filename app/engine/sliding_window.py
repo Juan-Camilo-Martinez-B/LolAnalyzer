@@ -209,10 +209,15 @@ class SlidingWindowBuffer:
                 elapsed = current_game_time - usage.used_at_game_time
                 if elapsed < usage.cooldown_seconds:
                     return False
-                break
+                return True
 
         state = self._summoner_states.get(spell_type)
         if state is not None:
+            if not state.is_ready and state.last_used_game_time is not None:
+                elapsed = current_game_time - state.last_used_game_time
+                if elapsed < state.cooldown_remaining_seconds:
+                    return False
+                return True
             return state.is_ready
 
         return True
@@ -229,6 +234,10 @@ class SlidingWindowBuffer:
 
         state = self._summoner_states.get(spell_type)
         if state is not None and not state.is_ready:
+            if state.last_used_game_time is not None:
+                elapsed = current_game_time - state.last_used_game_time
+                remaining = state.cooldown_remaining_seconds - elapsed
+                return max(0.0, remaining)
             return max(0.0, state.cooldown_remaining_seconds)
 
         return 0.0
