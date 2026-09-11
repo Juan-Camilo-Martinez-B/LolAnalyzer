@@ -1,9 +1,10 @@
 """
 LolAnalyzer Backend - Real-Time WebSocket API
 Manages client connections with the Overwolf frontend app, processes incoming telemetry streams,
-updates the sliding window buffer, and broadcasts rule triggers and tactical alerts.
+updates the sliding window buffer, and broadcasts rule triggers and tactical AI coach advice.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -26,6 +27,7 @@ from app.schemas.game_events import (
     WSMessage,
     WSMessageType,
 )
+from app.services.gemini_service import gemini_coach_service
 
 logger = logging.getLogger("lol_analyzer.websocket")
 
@@ -35,7 +37,7 @@ router = APIRouter(tags=["WebSocket"])
 class ConnectionManager:
     """
     Manages active WebSocket connections from Overwolf desktop apps
-    and provides real-time event broadcasting.
+    and provides real-time event broadcasting and AI dispatch.
     """
 
     def __init__(self):
@@ -70,6 +72,38 @@ class ConnectionManager:
 
         for dc in disconnected_clients:
             self.disconnect(dc)
+
+    async def handle_rule_trigger(self, trigger: RuleTrigger) -> None:
+        """
+        Dispatches a detected RuleTrigger through the real-time pipeline:
+        1. Broadcasts the raw RULE_TRIGGERED event.
+        2. Dispatches asynchronously to Gemini Coach (<12 words tactical advice).
+        3. Broadcasts the resulting TACTICAL_ADVICE to all overlay HUD clients.
+        """
+        now = time.time()
+
+        # Step 1: Broadcast raw rule trigger
+        await self.broadcast(
+            WSMessage(
+                type=WSMessageType.RULE_TRIGGERED,
+                payload=trigger.model_dump(),
+                timestamp=now,
+            )
+        )
+
+        # Step 2 & 3: Asynchronously generate tactical advice and broadcast
+        try:
+            advice: CoachAdvice = await gemini_coach_service.generate_tactical_advice(trigger)
+            await self.broadcast(
+                WSMessage(
+                    type=WSMessageType.TACTICAL_ADVICE,
+                    payload=advice.model_dump(),
+                    timestamp=time.time(),
+                )
+            )
+            logger.info(f"Tactical Advice emitted: '{advice.text}' (by {advice.generated_by})")
+        except Exception as e:
+            logger.error(f"Error generating or broadcasting tactical advice: {e}")
 
     def reset_session(self) -> None:
         """Resets engine sliding window and rule cooldowns for a new match."""
@@ -136,14 +170,7 @@ async def websocket_events_endpoint(websocket: WebSocket):
                     # Evaluate heuristic rules on updated state
                     trigger = manager.rules_evaluator.evaluate(manager.buffer, telemetry)
                     if trigger:
-                        # Broadcast the triggered rule event to the overlay
-                        await manager.broadcast(
-                            WSMessage(
-                                type=WSMessageType.RULE_TRIGGERED,
-                                payload=trigger.model_dump(),
-                                timestamp=time.time(),
-                            )
-                        )
+                        await manager.handle_rule_trigger(trigger)
                 except Exception as e:
                     logger.error(f"Failed to process telemetry ingest: {e}")
 
@@ -155,13 +182,7 @@ async def websocket_events_endpoint(websocket: WebSocket):
                     event = GameEvent(**payload)
                     trigger = manager.rules_evaluator.evaluate_event(manager.buffer, event)
                     if trigger:
-                        await manager.broadcast(
-                            WSMessage(
-                                type=WSMessageType.RULE_TRIGGERED,
-                                payload=trigger.model_dump(),
-                                timestamp=time.time(),
-                            )
-                        )
+                        await manager.handle_rule_trigger(trigger)
                 except Exception as e:
                     logger.error(f"Failed to process game event: {e}")
 

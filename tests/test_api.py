@@ -112,7 +112,14 @@ def test_websocket_telemetry_tilt_trigger(client: TestClient):
         websocket.send_text(json.dumps(t2))
 
         # We should receive RULE_TRIGGERED for TILT_RISK
-        response = websocket.receive_text()
-        data = json.loads(response)
-        assert data["type"] == WSMessageType.RULE_TRIGGERED.value
-        assert data["payload"]["trigger_type"] == TriggerType.TILT_RISK.value
+        response1 = websocket.receive_text()
+        data1 = json.loads(response1)
+        assert data1["type"] == WSMessageType.RULE_TRIGGERED.value
+        assert data1["payload"]["trigger_type"] == TriggerType.TILT_RISK.value
+
+        # Following RULE_TRIGGERED, we should receive TACTICAL_ADVICE
+        response2 = websocket.receive_text()
+        data2 = json.loads(response2)
+        assert data2["type"] == WSMessageType.TACTICAL_ADVICE.value
+        assert "text" in data2["payload"]
+        assert len(data2["payload"]["text"].split()) <= 12
