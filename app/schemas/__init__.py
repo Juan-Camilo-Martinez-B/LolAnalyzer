@@ -2,22 +2,31 @@
 Schemas module for LolAnalyzer Backend.
 """
 
+from app.schemas.auth import (
+    GoogleAuthRequest,
+    LogoutResponse,
+    RefreshTokenRequest,
+    TokenResponse,
+    UserLogin,
+    UserRegister,
+    UserResponse,
+)
 from app.schemas.game_events import (
-    Role,
-    GameEventType,
-    SummonerSpellType,
-    TriggerType,
-    RuleSeverity,
-    WSMessageType,
-    SummonerSpellState,
-    PlayerTelemetry,
-    GameEvent,
-    RuleTrigger,
-    CoachAdvice,
-    WSMessage,
     ChampSelectAction,
     ChampSelectSession,
+    CoachAdvice,
+    GameEvent,
+    GameEventType,
     PickRecommendation,
+    PlayerTelemetry,
+    Role,
+    RuleSeverity,
+    RuleTrigger,
+    SummonerSpellState,
+    SummonerSpellType,
+    TriggerType,
+    WSMessage,
+    WSMessageType,
 )
 
 __all__ = [
@@ -36,4 +45,11 @@ __all__ = [
     "ChampSelectAction",
     "ChampSelectSession",
     "PickRecommendation",
+    "UserRegister",
+    "UserLogin",
+    "GoogleAuthRequest",
+    "TokenResponse",
+    "RefreshTokenRequest",
+    "UserResponse",
+    "LogoutResponse",
 ]
