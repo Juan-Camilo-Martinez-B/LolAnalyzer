@@ -2,6 +2,7 @@
 Unit tests for GeminiCoachService (Prompts, word limits, and tactical advice generation).
 """
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -70,26 +71,24 @@ class TestGeminiService:
             assert word_count <= 12
             assert len(advice.text) > 0
 
-        import asyncio
         asyncio.run(run_test())
 
     def test_gemini_api_mock_generation(self, mock_trigger: RuleTrigger):
         async def run_test():
-            service = GeminiCoachService(api_key="mock_test_key")
+            service = GeminiCoachService(api_key="")
             
-            # Mock the genai client
+            # Mock the genai client response
             mock_response = MagicMock()
             mock_response.text = "Farmea seguro bajo torre y espera al jungla."
             
             mock_client = MagicMock()
             mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-            service._client = mock_client
             
-            advice = await service.generate_tactical_advice(mock_trigger)
-            assert advice is not None
-            assert advice.text == "Farmea seguro bajo torre y espera al jungla."
-            assert advice.generated_by == service.model_name
-            assert len(advice.text.split()) <= 12
+            with patch.object(service, "_get_client", return_value=mock_client):
+                advice = await service.generate_tactical_advice(mock_trigger)
+                assert advice is not None
+                assert advice.text == "Farmea seguro bajo torre y espera al jungla."
+                assert advice.generated_by == service.model_name
+                assert len(advice.text.split()) <= 12
 
-        import asyncio
         asyncio.run(run_test())

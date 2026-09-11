@@ -9,7 +9,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.core.prompts import build_trigger_prompt, get_system_prompt_for_role
@@ -24,12 +24,14 @@ from app.schemas.game_events import (
 
 logger = logging.getLogger("lol_analyzer.gemini_service")
 
-# Try importing the official google-genai SDK
+# Safe import of official google-genai SDK
 try:
     from google import genai
     from google.genai import types
     GENAI_AVAILABLE = True
 except ImportError:
+    genai = None
+    types = None
     GENAI_AVAILABLE = False
     logger.warning("google-genai SDK not installed or unavailable. Using heuristic fallback coach.")
 
@@ -37,27 +39,53 @@ except ImportError:
 class GeminiCoachService:
     """
     Asynchronous tactical advisor leveraging Google Gemini 1.5 Flash.
-    Generates imperative, role-contextual advice in <12 words.
+    Generates imperative, role-contextual advice in <= 12 words.
     """
 
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
-        self.api_key: str = api_key if api_key is not None else settings.GEMINI_API_KEY
+        self._custom_api_key: Optional[str] = api_key
         self.model_name: str = model_name or settings.GEMINI_MODEL_NAME
         self._client: Optional[Any] = None
+        self._last_initialized_key: Optional[str] = None
+        self._get_client()
 
-        if GENAI_AVAILABLE and self.api_key and self.api_key.strip() and self.api_key != "tu_api_key_aqui":
-            try:
-                self._client = genai.Client(api_key=self.api_key)
-                logger.info(f"Gemini Coach Client initialized with model {self.model_name}.")
-            except Exception as e:
-                logger.error(f"Failed to initialize GenAI Client: {e}")
+    def _get_api_key(self) -> str:
+        """Returns the configured API key from constructor or settings."""
+        if self._custom_api_key is not None:
+            return self._custom_api_key.strip()
+        return settings.GEMINI_API_KEY.strip() if settings.GEMINI_API_KEY else ""
+
+    def _get_client(self) -> Optional[Any]:
+        """
+        Dynamically initializes or retrieves the GenAI Client.
+        Ensures that if the user adds or updates their GEMINI_API_KEY in .env,
+        the client will automatically initialize without requiring a restart.
+        """
+        current_key = self._get_api_key()
+
+        # If key changed, re-evaluate client creation
+        if current_key != self._last_initialized_key:
+            self._last_initialized_key = current_key
+            if (
+                GENAI_AVAILABLE
+                and current_key
+                and current_key != "tu_api_key_aqui"
+                and genai is not None
+            ):
+                try:
+                    self._client = genai.Client(api_key=current_key)
+                    logger.info(f"Gemini Coach Client initialized successfully with model {self.model_name}.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize GenAI Client: {e}")
+                    self._client = None
+            else:
                 self._client = None
-        else:
-            logger.info("GenAI Client offline (API key empty or placeholder). Heuristic fallback active.")
+
+        return self._client
 
     def is_ai_ready(self) -> bool:
         """Returns True if Google GenAI client is authenticated and ready."""
-        return self._client is not None
+        return self._get_client() is not None
 
     async def generate_tactical_advice(self, trigger: RuleTrigger) -> CoachAdvice:
         """
@@ -66,9 +94,10 @@ class GeminiCoachService:
         """
         t = trigger.telemetry_snapshot
         advice_id = str(uuid.uuid4())[:8]
+        client = self._get_client()
 
         # If AI client is active, attempt Gemini 1.5 Flash generation
-        if self._client is not None:
+        if client is not None and GENAI_AVAILABLE and types is not None:
             try:
                 system_instruction = get_system_prompt_for_role(t.role)
                 user_prompt = build_trigger_prompt(trigger)
@@ -80,7 +109,7 @@ class GeminiCoachService:
                     max_output_tokens=40,
                 )
 
-                response = await self._client.aio.models.generate_content(
+                response = await client.aio.models.generate_content(
                     model=self.model_name,
                     contents=user_prompt,
                     config=config,
@@ -118,7 +147,6 @@ class GeminiCoachService:
 
     def _clean_and_truncate_text(self, text: str, max_words: int = 12) -> str:
         """Strips markdown, quotes, trailing characters, and limits word count to 12."""
-        # Remove quotes and markdown markers
         text = re.sub(r'["`*_\n\r]', ' ', text).strip()
         text = re.sub(r'\s+', ' ', text)
 
@@ -130,7 +158,7 @@ class GeminiCoachService:
 
     def _generate_heuristic_fallback(self, trigger: RuleTrigger) -> str:
         """
-        Deterministic, role-tailored tactical fallback messages (<12 words).
+        Deterministic, role-tailored tactical fallback messages (<= 12 words).
         """
         t = trigger.telemetry_snapshot
         ttype = trigger.trigger_type
