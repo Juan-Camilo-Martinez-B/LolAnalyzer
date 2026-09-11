@@ -69,6 +69,8 @@ async def register(user_in: UserRegister, db: AsyncSession = Depends(get_db)) ->
         auth_provider="local",
         summoner_name=user_in.summoner_name.strip() if user_in.summoner_name else None,
         region=user_in.region.lower().strip(),
+        preferred_roles=user_in.preferred_roles.strip(),
+        coach_sensitivity=user_in.coach_sensitivity.lower().strip(),
     )
     db.add(new_user)
     await db.commit()

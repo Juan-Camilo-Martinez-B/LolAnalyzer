@@ -15,6 +15,9 @@ class UserRegister(BaseModel):
     password: str = Field(..., min_length=6, description="Password with minimum 6 characters")
     summoner_name: Optional[str] = Field(default=None, description="Optional LoL summoner name")
     region: str = Field(default="la1", description="League region (e.g. la1, na1, euw1)")
+    preferred_roles: str = Field(default="MID,TOP", description="Comma-separated preferred roles")
+    coach_sensitivity: str = Field(default="normal", description="Coach sensitivity: low, normal, high")
+
 
 
 class UserLogin(BaseModel):

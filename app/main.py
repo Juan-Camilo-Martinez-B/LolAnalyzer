@@ -13,7 +13,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from app.api import auth_router, champ_select_router, websocket_router, ws_manager
+from app.api import (
+    auth_router,
+    champ_select_router,
+    profile_router,
+    websocket_router,
+    ws_manager,
+)
 from app.core.config import settings
 from app.services.riot_lcu import riot_lcu_service
 
@@ -78,6 +84,7 @@ app.add_middleware(
 
 # Include Routers
 app.include_router(auth_router)
+app.include_router(profile_router)
 app.include_router(websocket_router)
 app.include_router(champ_select_router)
 

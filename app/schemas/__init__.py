@@ -28,6 +28,12 @@ from app.schemas.game_events import (
     WSMessage,
     WSMessageType,
 )
+from app.schemas.profile import (
+    ChangePasswordRequest,
+    DeleteAccountRequest,
+    ProfileResponse,
+    ProfileUpdate,
+)
 
 __all__ = [
     "Role",
@@ -52,4 +58,8 @@ __all__ = [
     "RefreshTokenRequest",
     "UserResponse",
     "LogoutResponse",
+    "ProfileUpdate",
+    "ChangePasswordRequest",
+    "DeleteAccountRequest",
+    "ProfileResponse",
 ]

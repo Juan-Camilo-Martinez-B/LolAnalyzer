@@ -3,6 +3,7 @@ Integration and Unit tests for Authentication, Google OAuth, JWT Tokens, and Rev
 """
 
 from unittest.mock import patch
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,10 +18,12 @@ def client():
 
 class TestAuthentication:
     def test_register_and_login_flow(self, client: TestClient):
+        uid = uuid.uuid4().hex[:8]
+        email = f"caps_{uid}@g2.com"
         # 1. Register
         register_payload = {
-            "email": "caps@g2.com",
-            "username": "Caps",
+            "email": email,
+            "username": f"Caps_{uid}",
             "password": "supersecurepassword123",
             "summoner_name": "G2 Caps",
             "region": "euw1",
@@ -39,7 +42,7 @@ class TestAuthentication:
         # 3. Login with correct password
         login_res = client.post(
             "/api/auth/login",
-            json={"email": "caps@g2.com", "password": "supersecurepassword123"},
+            json={"email": email, "password": "supersecurepassword123"},
         )
         assert login_res.status_code == 200
         assert "access_token" in login_res.json()
@@ -47,16 +50,18 @@ class TestAuthentication:
         # 4. Login with wrong password fails
         bad_login = client.post(
             "/api/auth/login",
-            json={"email": "caps@g2.com", "password": "wrongpassword"},
+            json={"email": email, "password": "wrongpassword"},
         )
         assert bad_login.status_code == 401
 
     def test_protected_me_endpoint(self, client: TestClient):
+        uid = uuid.uuid4().hex[:8]
+        email = f"jankos_{uid}@heretics.com"
         # Register user
         client.post(
             "/api/auth/register",
             json={
-                "email": "jankos@heretics.com",
+                "email": email,
                 "username": "Jankos",
                 "password": "firstbloodking123",
                 "summoner_name": "Jankos",
@@ -65,7 +70,7 @@ class TestAuthentication:
         )
         login_res = client.post(
             "/api/auth/login",
-            json={"email": "jankos@heretics.com", "password": "firstbloodking123"},
+            json={"email": email, "password": "firstbloodking123"},
         )
         token = login_res.json()["access_token"]
 
@@ -74,7 +79,7 @@ class TestAuthentication:
         me_res = client.get("/api/auth/me", headers=headers)
         assert me_res.status_code == 200
         user_data = me_res.json()
-        assert user_data["email"] == "jankos@heretics.com"
+        assert user_data["email"] == email
         assert user_data["username"] == "Jankos"
         assert user_data["auth_provider"] == "local"
 
@@ -83,11 +88,13 @@ class TestAuthentication:
         assert unauth_res.status_code == 401
 
     def test_google_oauth_flow(self, client: TestClient):
+        uid = uuid.uuid4().hex[:8]
+        email = f"gumayusi_{uid}@t1.gg"
         mock_google_profile = {
-            "email": "gumayusi@t1.gg",
+            "email": email,
             "name": "Lee Min-hyeong",
             "picture": "https://lh3.googleusercontent.com/a/mock-pic",
-            "google_id": "google_oauth_sub_987654321",
+            "google_id": f"google_oauth_sub_{uid}",
         }
 
         with patch("app.api.auth.verify_google_id_token", return_value=mock_google_profile):
@@ -102,23 +109,25 @@ class TestAuthentication:
             me_res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
             assert me_res.status_code == 200
             user_data = me_res.json()
-            assert user_data["email"] == "gumayusi@t1.gg"
+            assert user_data["email"] == email
             assert user_data["auth_provider"] == "google"
             assert user_data["avatar_url"] == "https://lh3.googleusercontent.com/a/mock-pic"
 
     def test_logout_and_token_revocation_blacklist(self, client: TestClient):
+        uid = uuid.uuid4().hex[:8]
+        email = f"keria_{uid}@t1.gg"
         # Register and login
         client.post(
             "/api/auth/register",
             json={
-                "email": "keria@t1.gg",
+                "email": email,
                 "username": "Keria",
                 "password": "supportgod123",
             },
         )
         login_res = client.post(
             "/api/auth/login",
-            json={"email": "keria@t1.gg", "password": "supportgod123"},
+            json={"email": email, "password": "supportgod123"},
         )
         token = login_res.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
@@ -137,15 +146,18 @@ class TestAuthentication:
         assert "revoked" in revoked_check.json()["detail"].lower()
 
     def test_refresh_token_rotation(self, client: TestClient):
+        uid = uuid.uuid4().hex[:8]
+        email = f"zeus_{uid}@hle.kr"
         # Register and get tokens
         reg = client.post(
             "/api/auth/register",
             json={
-                "email": "zeus@hle.kr",
+                "email": email,
                 "username": "Zeus",
                 "password": "toplaneking123",
             },
         )
+        assert reg.status_code == 201
         refresh_token = reg.json()["refresh_token"]
 
         # Call /refresh with refresh_token
