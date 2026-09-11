@@ -1,6 +1,6 @@
 """
 LolAnalyzer Backend - Core Configuration
-Manages environment variables, server settings, and engine thresholds using Pydantic Settings.
+Manages environment variables, server settings, database connections, and security parameters.
 """
 
 from functools import lru_cache
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         case_sensitive=False
     )
 
-    # Application Info
+    # Application Metadata
     APP_NAME: str = "LolAnalyzer Backend"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
@@ -32,6 +32,21 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "overwolf-extension://*"
     ]
+
+    # Database Configuration (PostgreSQL Cloud / SQLite async fallback)
+    DATABASE_URL: str = ""
+    DB_ECHO: bool = False
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+
+    # Security & JWT Authentication
+    SECRET_KEY: str = "lol_analyzer_jwt_super_secret_development_key_987654321"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Google OAuth 2.0
+    GOOGLE_CLIENT_ID: str = ""
 
     # Google Gemini AI Configuration
     GEMINI_API_KEY: str = ""
@@ -56,6 +71,24 @@ class Settings(BaseSettings):
         elif isinstance(v, list):
             return v
         return ["*"]
+
+    @property
+    def async_database_url(self) -> str:
+        """
+        Returns an async-compatible database connection URL.
+        If DATABASE_URL is not set or empty, falls back to local async SQLite.
+        Converts 'postgres://' or 'postgresql://' to 'postgresql+asyncpg://'.
+        """
+        raw_url = self.DATABASE_URL.strip() if self.DATABASE_URL else ""
+        if not raw_url:
+            return "sqlite+aiosqlite:///./lol_analyzer.db"
+
+        if raw_url.startswith("postgres://"):
+            return raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif raw_url.startswith("postgresql://") and not raw_url.startswith("postgresql+asyncpg://"):
+            return raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+        return raw_url
 
 
 @lru_cache()

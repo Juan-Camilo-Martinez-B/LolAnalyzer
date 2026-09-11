@@ -34,6 +34,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"Host: {settings.HOST}:{settings.PORT} | Debug: {settings.DEBUG}")
 
+    # Initialize database tables
+    try:
+        from app.db.session import init_db
+        await init_db()
+    except Exception as e:
+        logger.error(f"Database initialization error: {e}")
+
     # Attempt initial LCU discovery
     if settings.LCU_AUTO_CONNECT:
         try:
