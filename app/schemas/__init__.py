@@ -2,6 +2,16 @@
 Schemas module for LolAnalyzer Backend.
 """
 
+from app.schemas.analytics import (
+    CoachImpactChartData,
+    CoachImpactSlice,
+    CSProgressionChartData,
+    CSProgressionPoint,
+    RadarAxisScore,
+    RoleRadarChartData,
+    TiltHeatmapBucket,
+    TiltHeatmapChartData,
+)
 from app.schemas.auth import (
     GoogleAuthRequest,
     LogoutResponse,
@@ -84,4 +94,12 @@ __all__ = [
     "ChampionStatSummary",
     "StatsSummary",
     "ResetStatsResponse",
+    "CSProgressionPoint",
+    "CSProgressionChartData",
+    "TiltHeatmapBucket",
+    "TiltHeatmapChartData",
+    "RadarAxisScore",
+    "RoleRadarChartData",
+    "CoachImpactSlice",
+    "CoachImpactChartData",
 ]
