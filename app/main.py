@@ -17,6 +17,7 @@ from app.api import (
     auth_router,
     champ_select_router,
     profile_router,
+    stats_router,
     websocket_router,
     ws_manager,
 )
@@ -85,6 +86,7 @@ app.add_middleware(
 # Include Routers
 app.include_router(auth_router)
 app.include_router(profile_router)
+app.include_router(stats_router)
 app.include_router(websocket_router)
 app.include_router(champ_select_router)
 

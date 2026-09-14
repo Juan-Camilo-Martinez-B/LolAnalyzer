@@ -34,6 +34,18 @@ from app.schemas.profile import (
     ProfileResponse,
     ProfileUpdate,
 )
+from app.schemas.stats import (
+    ChampionStatSummary,
+    MatchCreate,
+    MatchDetailResponse,
+    MatchListItem,
+    PaginatedMatchesResponse,
+    ResetStatsResponse,
+    RoleStatSummary,
+    StatsSummary,
+    TelemetryPointCreate,
+    TelemetryPointResponse,
+)
 
 __all__ = [
     "Role",
@@ -62,4 +74,14 @@ __all__ = [
     "ChangePasswordRequest",
     "DeleteAccountRequest",
     "ProfileResponse",
+    "TelemetryPointCreate",
+    "TelemetryPointResponse",
+    "MatchCreate",
+    "MatchListItem",
+    "MatchDetailResponse",
+    "PaginatedMatchesResponse",
+    "RoleStatSummary",
+    "ChampionStatSummary",
+    "StatsSummary",
+    "ResetStatsResponse",
 ]
