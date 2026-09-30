@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_NAME: str = "gemini-1.5-flash"
 
+    # Official Riot API key. Never expose this to the desktop client.
+    # RSO (Riot Sign On) needs an approved production application and is not used here.
+    RIOT_API_KEY: str = ""
+
     # Riot LCU (League Client Update) Settings
     LCU_POLL_INTERVAL: float = 2.0
     LCU_AUTO_CONNECT: bool = True

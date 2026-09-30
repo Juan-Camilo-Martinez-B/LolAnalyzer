@@ -18,6 +18,7 @@ from app.api import (
     auth_router,
     champ_select_router,
     profile_router,
+    riot_router,
     stats_router,
     websocket_router,
     ws_manager,
@@ -75,10 +76,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS for Overwolf App (overwolf-extension://) and local Vite development
+_configured_origins = settings.ALLOWED_ORIGINS if isinstance(settings.ALLOWED_ORIGINS, list) else []
+_allowed_origins = [origin for origin in _configured_origins if origin and origin != "*"]
+if not _allowed_origins:
+    _allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# Credentials cannot be combined with a wildcard origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS if isinstance(settings.ALLOWED_ORIGINS, list) else ["*"],
+    allow_origins=_allowed_origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|overwolf-extension://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,6 +93,7 @@ app.add_middleware(
 
 # Include Routers
 app.include_router(auth_router)
+app.include_router(riot_router)
 app.include_router(profile_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
