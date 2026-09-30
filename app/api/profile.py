@@ -109,6 +109,7 @@ async def change_password(
             )
 
     current_user.hashed_password = hash_password(request.new_password)
+    current_user.session_version = int(current_user.session_version or 1) + 1
     await db.commit()
 
     logger.info(f"Password changed for user: {current_user.email}")

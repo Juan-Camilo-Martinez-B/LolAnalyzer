@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,6 +51,14 @@ class User(Base):
     preferred_roles: Mapped[str] = mapped_column(String(100), default="MID,TOP", nullable=False)
     coach_sensitivity: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)  # "low", "normal", "high"
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    session_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Official Riot account link. Only identifiers; match data stays on Riot's API.
+    riot_puuid: Mapped[Optional[str]] = mapped_column(String(80), unique=True, index=True, nullable=True)
+    riot_game_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    riot_tag_line: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
@@ -58,6 +67,53 @@ class User(Base):
     matches: Mapped[List["MatchRecord"]] = relationship(
         "MatchRecord", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
+    security_answers: Mapped[Optional["SecurityAnswers"]] = relationship(
+        "SecurityAnswers", back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class SecurityAnswers(Base):
+    """
+    Hashed recovery answers. The plaintext is never stored or returned.
+    """
+    __tablename__ = "security_answers"
+
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    favorite_champion_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    peak_elo_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    first_main_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="security_answers")
+
+
+class AuthAttempt(Base):
+    """
+    Shared lockout counter so login and recovery limits survive more than one process.
+    The subject is a hash, not the raw email.
+    """
+    __tablename__ = "auth_attempts"
+    __table_args__ = (UniqueConstraint("subject_hash", "purpose", name="uq_auth_attempt_subject"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    subject_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    window_started: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RiotCacheEntry(Base):
+    """Short-lived Riot API cache. Rows expire by TTL and are not a match archive."""
+    __tablename__ = "riot_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class TokenBlacklist(Base):

@@ -25,6 +25,10 @@ class TestAuthentication:
             "email": email,
             "username": f"Caps_{uid}",
             "password": "supersecurepassword123",
+            "password_confirm": "supersecurepassword123",
+            "favorite_champion": "Ahri",
+            "peak_elo": "oro",
+            "first_main": "Lee Sin",
             "summoner_name": "G2 Caps",
             "region": "euw1",
         }
@@ -37,7 +41,7 @@ class TestAuthentication:
 
         # 2. Duplicate registration fails
         res_dup = client.post("/api/auth/register", json=register_payload)
-        assert res_dup.status_code == 400
+        assert res_dup.status_code == 409
 
         # 3. Login with correct password
         login_res = client.post(
@@ -64,6 +68,10 @@ class TestAuthentication:
                 "email": email,
                 "username": "Jankos",
                 "password": "firstbloodking123",
+                "password_confirm": "firstbloodking123",
+                "favorite_champion": "Ahri",
+                "peak_elo": "oro",
+                "first_main": "Lee Sin",
                 "summoner_name": "Jankos",
                 "region": "euw1",
             },
@@ -123,6 +131,10 @@ class TestAuthentication:
                 "email": email,
                 "username": "Keria",
                 "password": "supportgod123",
+                "password_confirm": "supportgod123",
+                "favorite_champion": "Ahri",
+                "peak_elo": "oro",
+                "first_main": "Lee Sin",
             },
         )
         login_res = client.post(
@@ -155,6 +167,10 @@ class TestAuthentication:
                 "email": email,
                 "username": "Zeus",
                 "password": "toplaneking123",
+                "password_confirm": "toplaneking123",
+                "favorite_champion": "Ahri",
+                "peak_elo": "oro",
+                "first_main": "Lee Sin",
             },
         )
         assert reg.status_code == 201

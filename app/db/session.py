@@ -75,6 +75,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """Initializes database schema and tables."""
+    from app.db.schema_compat import ensure_auth_columns
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_auth_columns(conn)
     logger.info("Database schema initialized.")

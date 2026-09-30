@@ -70,21 +70,21 @@ def create_token(
     return encoded_jwt, token_jti, expire
 
 
-def create_access_token(user_id: int, email: str) -> Tuple[str, str, datetime]:
+def create_access_token(user_id: int, email: str, session_version: int = 1) -> Tuple[str, str, datetime]:
     """Generates a standard access token valid for settings.ACCESS_TOKEN_EXPIRE_MINUTES."""
     expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return create_token(
-        data={"sub": str(user_id), "email": email},
+        data={"sub": str(user_id), "email": email, "ver": session_version},
         expires_delta=expires_delta,
         token_type="access",
     )
 
 
-def create_refresh_token(user_id: int, email: str) -> Tuple[str, str, datetime]:
+def create_refresh_token(user_id: int, email: str, session_version: int = 1) -> Tuple[str, str, datetime]:
     """Generates a refresh token valid for settings.REFRESH_TOKEN_EXPIRE_DAYS."""
     expires_delta = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     return create_token(
-        data={"sub": str(user_id), "email": email},
+        data={"sub": str(user_id), "email": email, "ver": session_version},
         expires_delta=expires_delta,
         token_type="refresh",
     )
@@ -169,8 +169,9 @@ async def get_current_user(
     token_jti = payload.get("jti")
     token_type = payload.get("type")
     user_id = payload.get("sub")
+    token_version = payload.get("ver")
 
-    if token_type != "access" or not token_jti or not user_id:
+    if token_type != "access" or not token_jti or not user_id or token_version is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload structure.",
@@ -208,6 +209,13 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive or disabled.",
+        )
+
+    if int(token_version) != int(user.session_version or 1):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session is no longer valid. Sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     return user

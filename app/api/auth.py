@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.recovery import canonical_champion, canonical_elo
 from app.core.security import (
     blacklist_token,
     create_access_token,
@@ -27,59 +28,33 @@ from app.core.security import (
     verify_google_id_token,
     verify_password,
 )
-from app.db.models import User
+from app.db.models import SecurityAnswers, User
 from app.db.session import get_db
 from app.schemas.auth import (
     GoogleAuthRequest,
     LogoutResponse,
+    RecoveryResetRequest,
+    RecoveryStartRequest,
     RefreshTokenRequest,
     TokenResponse,
     UserLogin,
     UserRegister,
     UserResponse,
 )
+from app.services.auth_guard import assert_not_locked, clear_attempts, register_failure
+from app.services.champion_catalog import get_champion_catalog
 
 logger = logging.getLogger("lol_analyzer.auth")
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
+GENERIC_RECOVERY_ERROR = "No se pudo verificar la identidad con esos datos."
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_in: UserRegister, db: AsyncSession = Depends(get_db)) -> TokenResponse:
-    """
-    Registers a new user account using email and password.
-    Returns access and refresh JWT tokens upon successful creation.
-    """
-    # Check if email is already taken
-    stmt = select(User).where(User.email == user_in.email.lower().strip())
-    result = await db.execute(stmt)
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this email address already exists.",
-        )
 
-    # Hash password securely with Bcrypt
-    hashed_pwd = hash_password(user_in.password)
-
-    new_user = User(
-        email=user_in.email.lower().strip(),
-        username=user_in.username.strip(),
-        hashed_password=hashed_pwd,
-        auth_provider="local",
-        summoner_name=user_in.summoner_name.strip() if user_in.summoner_name else None,
-        region=user_in.region.lower().strip(),
-        preferred_roles=user_in.preferred_roles.strip(),
-        coach_sensitivity=user_in.coach_sensitivity.lower().strip(),
-    )
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-
-    access_token, _, _ = create_access_token(new_user.id, new_user.email)
-    refresh_token, _, _ = create_refresh_token(new_user.id, new_user.email)
-
-    logger.info(f"New user registered: {new_user.email} (ID: {new_user.id})")
+def issue_tokens(user: User) -> TokenResponse:
+    version = int(user.session_version or 1)
+    access_token, _, _ = create_access_token(user.id, user.email, version)
+    refresh_token, _, _ = create_refresh_token(user.id, user.email, version)
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -88,17 +63,73 @@ async def register(user_in: UserRegister, db: AsyncSession = Depends(get_db)) ->
     )
 
 
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def register(user_in: UserRegister, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+    """
+    Registers a new user account using email and password.
+    Returns access and refresh JWT tokens upon successful creation.
+    """
+    email = user_in.email.lower().strip()
+    stmt = select(User).where(User.email == email)
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email address already exists.",
+        )
+
+    catalog = await get_champion_catalog(db)
+    favorite = canonical_champion(user_in.favorite_champion, catalog)
+    first_main = canonical_champion(user_in.first_main, catalog)
+    peak_elo = canonical_elo(user_in.peak_elo)
+    if not favorite or not first_main or not peak_elo:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Recovery answers must use a known champion and rank.",
+        )
+
+    new_user = User(
+        email=email,
+        username=user_in.username.strip(),
+        hashed_password=hash_password(user_in.password),
+        auth_provider="local",
+        summoner_name=user_in.summoner_name.strip() if user_in.summoner_name else None,
+        region=user_in.region.lower().strip(),
+        preferred_roles=user_in.preferred_roles.strip(),
+        coach_sensitivity=user_in.coach_sensitivity.lower().strip(),
+        session_version=1,
+    )
+    db.add(new_user)
+    await db.flush()
+    db.add(SecurityAnswers(
+        user_id=new_user.id,
+        favorite_champion_hash=hash_password(favorite),
+        peak_elo_hash=hash_password(peak_elo),
+        first_main_hash=hash_password(first_main),
+    ))
+    await db.commit()
+    await db.refresh(new_user)
+
+    logger.info("New user registered: id=%s", new_user.id)
+    return issue_tokens(new_user)
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)) -> TokenResponse:
     """
     Authenticates an existing user with email and password.
     Returns access and refresh JWT tokens.
     """
-    stmt = select(User).where(User.email == credentials.email.lower().strip())
+    email = credentials.email.lower().strip()
+    await assert_not_locked(db, email, "login")
+
+    stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
-    if not user or not user.hashed_password or not verify_password(credentials.password, user.hashed_password):
+    password_ok = bool(user and user.hashed_password and verify_password(credentials.password, user.hashed_password))
+    if not password_ok:
+        await register_failure(db, email, "login")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password.",
@@ -111,16 +142,12 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)) -> T
             detail="Account is inactive or disabled.",
         )
 
-    access_token, _, _ = create_access_token(user.id, user.email)
-    refresh_token, _, _ = create_refresh_token(user.id, user.email)
-
-    logger.info(f"User logged in: {user.email} (ID: {user.id})")
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        token_type="bearer",
-        expires_in_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    await clear_attempts(db, email, "login")
+    user.failed_login_count = 0
+    user.locked_until = None
+    await db.commit()
+    logger.info("User logged in: id=%s", user.id)
+    return issue_tokens(user)
 
 
 @router.post("/google", response_model=TokenResponse)
@@ -167,15 +194,7 @@ async def google_auth(request: GoogleAuthRequest, db: AsyncSession = Depends(get
         await db.refresh(user)
         logger.info(f"New user registered via Google: {email} (ID: {user.id})")
 
-    access_token, _, _ = create_access_token(user.id, user.email)
-    refresh_token, _, _ = create_refresh_token(user.id, user.email)
-
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        token_type="bearer",
-        expires_in_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    return issue_tokens(user)
 
 
 @router.post("/logout", response_model=LogoutResponse)
@@ -225,7 +244,8 @@ async def refresh_token_endpoint(
     token_type = payload.get("type")
     user_id = payload.get("sub")
 
-    if token_type != "refresh" or not token_jti or not user_id:
+    token_version = payload.get("ver")
+    if token_type != "refresh" or not token_jti or not user_id or token_version is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Provided token is not a valid refresh token.",
@@ -247,15 +267,13 @@ async def refresh_token_endpoint(
             detail="User account no longer exists or is inactive.",
         )
 
-    new_access_token, _, _ = create_access_token(user.id, user.email)
-    new_refresh_token, _, _ = create_refresh_token(user.id, user.email)
+    if int(token_version) != int(user.session_version or 1):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is no longer valid.",
+        )
 
-    return TokenResponse(
-        access_token=new_access_token,
-        refresh_token=new_refresh_token,
-        token_type="bearer",
-        expires_in_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    return issue_tokens(user)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -264,3 +282,65 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse
     Returns full profile and settings of the currently authenticated user.
     """
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/recovery-options")
+async def recovery_options(db: AsyncSession = Depends(get_db)) -> dict:
+    """Public catalogs for the recovery form. Answers are never included."""
+    from app.core.recovery import ELO_OPTIONS
+    from app.services.champion_catalog import get_champion_catalog
+
+    champions = await get_champion_catalog(db)
+    return {"elos": ELO_OPTIONS, "champions": champions}
+
+
+@router.post("/forgot-password")
+async def forgot_password(_: RecoveryStartRequest) -> dict:
+    """
+    Always returns the same body so the response does not reveal whether the email exists.
+    """
+    return {"status": "continue"}
+
+
+@router.post("/reset-password")
+async def reset_password(body: RecoveryResetRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """
+    Replaces the password when the three recovery answers match.
+    Wrong answers, unknown emails and missing answers share one error.
+    """
+    email = body.email.strip().lower()
+    await assert_not_locked(db, email, "recovery")
+
+    catalog = await get_champion_catalog(db)
+    favorite = canonical_champion(body.favorite_champion, catalog)
+    first_main = canonical_champion(body.first_main, catalog)
+    peak_elo = canonical_elo(body.peak_elo)
+
+    user_result = await db.execute(select(User).where(User.email == email))
+    user = user_result.scalar_one_or_none()
+    answers = None
+    if user is not None:
+        answer_result = await db.execute(select(SecurityAnswers).where(SecurityAnswers.user_id == user.id))
+        answers = answer_result.scalar_one_or_none()
+
+    answers_match = bool(
+        user and answers and favorite and first_main and peak_elo
+        and verify_password(favorite, answers.favorite_champion_hash)
+        and verify_password(peak_elo, answers.peak_elo_hash)
+        and verify_password(first_main, answers.first_main_hash)
+    )
+    if not answers_match or user is None or answers is None:
+        await register_failure(db, email, "recovery")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=GENERIC_RECOVERY_ERROR)
+
+    user.hashed_password = hash_password(body.new_password)
+    user.session_version = int(user.session_version or 1) + 1
+    user.failed_login_count = 0
+    user.locked_until = None
+    answers.failed_attempts = 0
+    answers.locked_until = None
+    await clear_attempts(db, email, "recovery")
+    await clear_attempts(db, email, "login")
+    await db.commit()
+    logger.info("Password reset completed for user id=%s", user.id)
+    return {"status": "password_reset"}
