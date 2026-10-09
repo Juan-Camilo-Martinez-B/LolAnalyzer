@@ -38,10 +38,16 @@ def get_engine() -> AsyncEngine:
     if is_sqlite:
         engine_kwargs["connect_args"] = {"check_same_thread": False}
     else:
-        # PostgreSQL Connection Pooling
+        # PostgreSQL Connection Pooling.
+        # Supabase exposes PgBouncer in transaction mode, which rejects asyncpg's
+        # named prepared statements. Both caches must stay off for that pooler.
         engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
         engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
         engine_kwargs["pool_pre_ping"] = True
+        engine_kwargs["connect_args"] = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        }
 
     logger.info(f"Initializing Async Database Engine: {'SQLite' if is_sqlite else 'PostgreSQL'}")
     return create_async_engine(db_url, **engine_kwargs)
