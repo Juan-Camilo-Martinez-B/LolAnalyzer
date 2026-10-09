@@ -35,6 +35,23 @@ class RiotConnectRequest(BaseModel):
     region: str = Field(default="la1", min_length=2, max_length=10)
 
 
+QUEUE_LABELS = {
+    400: "Normal Draft",
+    420: "Ranked Solo",
+    430: "Normal Blind",
+    440: "Ranked Flex",
+    450: "ARAM",
+    490: "Quickplay",
+    700: "Clash",
+    1700: "Arena",
+    1900: "URF",
+}
+
+
+def _queue_label(queue_id: int, fallback: str | None) -> str:
+    return QUEUE_LABELS.get(queue_id) or fallback or "CLASSIC"
+
+
 def _role(position: str | None) -> str:
     mapped = {"BOTTOM": "ADC", "UTILITY": "SUPPORT", "": "UNKNOWN"}.get(position or "", position or "UNKNOWN")
     if mapped not in {"TOP", "JUNGLE", "MID", "ADC", "SUPPORT", "FILL", "UNKNOWN"}:
@@ -57,9 +74,12 @@ def _map_match(payload: dict[str, Any], puuid: str) -> dict[str, Any]:
     timestamp = None
     if created:
         timestamp = datetime.fromtimestamp(created / 1000, tz=timezone.utc).isoformat()
+    queue_id = int(info.get("queueId") or 0)
+    items = [int(participant.get(f"item{index}") or 0) for index in range(6)]
     return {
         "matchId": (payload.get("metadata") or {}).get("matchId"),
-        "gameMode": info.get("gameMode") or "CLASSIC",
+        "queueId": queue_id,
+        "gameMode": _queue_label(queue_id, info.get("gameMode")),
         "isWin": bool(participant.get("win")),
         "championName": participant.get("championName") or "Unknown",
         "role": _role(participant.get("teamPosition")),
@@ -71,6 +91,11 @@ def _map_match(payload: dict[str, Any], puuid: str) -> dict[str, Any]:
         "csPerMin": round(cs / (duration / 60), 2) if duration else 0,
         "durationSec": duration,
         "timestamp": timestamp,
+        "items": items,
+        "trinketId": int(participant.get("item6") or 0),
+        "goldEarned": int(participant.get("goldEarned") or 0),
+        "visionScore": int(participant.get("visionScore") or 0),
+        "damageDealt": int(participant.get("totalDamageDealtToChampions") or 0),
     }
 
 
