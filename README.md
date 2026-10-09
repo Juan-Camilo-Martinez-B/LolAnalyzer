@@ -32,6 +32,7 @@ Riot Sign On (RSO) es el login oficial del jugador, pero Riot solo lo entrega a 
 | POST | `/api/auth/logout` | bearer |
 | POST | `/api/auth/refresh` | refresh token |
 | GET | `/api/auth/me` | bearer |
+| PUT | `/api/profile` | bearer. Incluye `theme_preference`: `light`, `system` o `dark`. |
 | GET | `/api/auth/recovery-options` | no |
 | POST | `/api/auth/forgot-password` | no |
 | POST | `/api/auth/reset-password` | no |
