@@ -25,6 +25,7 @@ def _ensure_auth_columns(sync_conn) -> None:
         "riot_puuid": "VARCHAR(80) NULL",
         "riot_game_name": "VARCHAR(100) NULL",
         "riot_tag_line": "VARCHAR(20) NULL",
+        "theme_preference": "VARCHAR(20) NOT NULL DEFAULT 'light'",
     }
     for name, ddl in additions.items():
         if name not in existing:

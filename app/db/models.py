@@ -50,6 +50,7 @@ class User(Base):
     # Coach Preferences
     preferred_roles: Mapped[str] = mapped_column(String(100), default="MID,TOP", nullable=False)
     coach_sensitivity: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)  # "low", "normal", "high"
+    theme_preference: Mapped[str] = mapped_column(String(20), default="light", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     session_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
