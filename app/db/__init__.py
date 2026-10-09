@@ -2,7 +2,7 @@
 Database module for LolAnalyzer Backend.
 """
 
-from app.db.models import MatchRecord, MatchTelemetryPoint, TokenBlacklist, User
+from app.db.models import CoachAdviceLog, MatchRecord, MatchTelemetryPoint, TokenBlacklist, User
 from app.db.session import AsyncSessionLocal, Base, engine, get_db, init_db
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     "get_db",
     "init_db",
     "User",
+    "CoachAdviceLog",
     "TokenBlacklist",
     "MatchRecord",
     "MatchTelemetryPoint",

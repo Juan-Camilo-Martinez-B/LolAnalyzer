@@ -11,6 +11,7 @@ from typing import Any
 from app.engine.rules_evaluator import RulesEvaluator
 from app.engine.sliding_window import SlidingWindowBuffer
 from app.schemas.game_events import Role, RuleSeverity, RuleTrigger, TriggerType
+from app.services.coach_metrics import record_advice
 from app.services.gemini_service import gemini_coach_service
 from app.services.live_game import fetch_live_game, parse_live_game
 from app.services.riot_lcu import riot_lcu_service
@@ -32,6 +33,7 @@ class LiveCoach:
         self._lock = asyncio.Lock()
         self._cached_at = 0.0
         self._cached_body: dict[str, Any] | None = None
+        self._saved_key: tuple[int, str, float] | None = None
 
     def reset_match(self) -> None:
         self.buffer.reset()
@@ -41,7 +43,7 @@ class LiveCoach:
         self.last_tip_at = -9999.0
         self._last_game_time = 0.0
 
-    async def snapshot(self) -> dict[str, Any]:
+    async def snapshot(self, db: Any = None, user_id: int | None = None) -> dict[str, Any]:
         now = time.monotonic()
         if self._cached_body is not None and (now - self._cached_at) < CACHE_SECONDS:
             return self._cached_body
@@ -50,12 +52,12 @@ class LiveCoach:
             now = time.monotonic()
             if self._cached_body is not None and (now - self._cached_at) < CACHE_SECONDS:
                 return self._cached_body
-            body = await self._read()
+            body = await self._read(db, user_id)
             self._cached_body = body
             self._cached_at = time.monotonic()
             return body
 
-    async def _read(self) -> dict[str, Any]:
+    async def _read(self, db: Any = None, user_id: int | None = None) -> dict[str, Any]:
         phase = "None"
         try:
             phase = await riot_lcu_service.get_gameflow_phase() or "None"
@@ -118,6 +120,13 @@ class LiveCoach:
                     "gameTime": advice.game_time_seconds,
                     "source": source,
                 }
+                saved_key = (user_id or 0, advice.text, advice.game_time_seconds)
+                if db is not None and user_id is not None and saved_key != self._saved_key:
+                    try:
+                        await record_advice(db, user_id, self.last_advice)
+                        self._saved_key = saved_key
+                    except Exception as save_error:
+                        logger.warning("Could not store live advice: %s", save_error)
                 logger.info("Live advice (%s): %s", source, advice.text)
             except Exception as error:
                 logger.warning("Live advice failed: %s", error)

@@ -117,6 +117,26 @@ class RiotCacheEntry(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CoachAdviceLog(Base):
+    """A tactical tip already shown to this account. It survives logout."""
+    __tablename__ = "coach_advice_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    advice_text: Mapped[str] = mapped_column(String(240), nullable=False)
+    trigger_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    champion_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    game_time_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    user: Mapped["User"] = relationship("User")
+
+
 class TokenBlacklist(Base):
     """
     Stores revoked JWT IDs (jti) for immediate, cryptographically sound Logout.
