@@ -91,6 +91,7 @@ class UserResponse(BaseModel):
     region: str
     preferred_roles: str
     coach_sensitivity: str
+    theme_preference: str = "light"
     riot_game_name: Optional[str] = None
     riot_tag_line: Optional[str] = None
     riot_linked: bool = False
@@ -101,6 +102,7 @@ class UserResponse(BaseModel):
     def mark_riot_link(cls, value):
         if isinstance(value, dict):
             value.setdefault("riot_linked", bool(value.get("riot_puuid")))
+            value.setdefault("theme_preference", value.get("theme_preference") or "light")
             return value
         return {
             "id": value.id,
@@ -113,6 +115,7 @@ class UserResponse(BaseModel):
             "region": value.region,
             "preferred_roles": value.preferred_roles,
             "coach_sensitivity": value.coach_sensitivity,
+            "theme_preference": getattr(value, "theme_preference", None) or "light",
             "riot_game_name": getattr(value, "riot_game_name", None),
             "riot_tag_line": getattr(value, "riot_tag_line", None),
             "riot_linked": bool(getattr(value, "riot_puuid", None)),

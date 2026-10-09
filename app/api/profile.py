@@ -57,6 +57,7 @@ async def get_profile(
         region=current_user.region,
         preferred_roles=current_user.preferred_roles,
         coach_sensitivity=current_user.coach_sensitivity,
+        theme_preference=current_user.theme_preference or "light",
         created_at=current_user.created_at,
         lcu_live_connected=is_lcu_live,
         total_matches_recorded=total_matches,
@@ -80,6 +81,8 @@ async def update_profile(
         current_user.preferred_roles = update_data.preferred_roles.strip()
     if update_data.coach_sensitivity is not None:
         current_user.coach_sensitivity = update_data.coach_sensitivity.lower().strip()
+    if update_data.theme_preference is not None:
+        current_user.theme_preference = update_data.theme_preference
     if update_data.region is not None:
         current_user.region = update_data.region.lower().strip()
     if update_data.summoner_name is not None:

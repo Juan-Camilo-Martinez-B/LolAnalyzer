@@ -5,7 +5,7 @@ profile editing, password changes, LCU account sync, and secure account deletion
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -14,6 +14,7 @@ class ProfileUpdate(BaseModel):
     avatar_url: Optional[str] = None
     preferred_roles: Optional[str] = Field(default=None, description="Comma-separated roles, e.g. 'MID,TOP'")
     coach_sensitivity: Optional[str] = Field(default=None, description="'low', 'normal', 'high'")
+    theme_preference: Optional[Literal["light", "system", "dark"]] = None
     region: Optional[str] = Field(default=None, description="League region (e.g. la1, na1, euw1)")
     summoner_name: Optional[str] = None
 
@@ -41,6 +42,7 @@ class ProfileResponse(BaseModel):
     region: str
     preferred_roles: str
     coach_sensitivity: str
+    theme_preference: str = "light"
     created_at: datetime
     lcu_live_connected: bool = False
     total_matches_recorded: int = 0
