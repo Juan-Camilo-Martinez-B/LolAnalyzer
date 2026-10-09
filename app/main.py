@@ -20,6 +20,7 @@ from app.api import (
     profile_router,
     riot_router,
     stats_router,
+    live_coach_router,
     websocket_router,
     ws_manager,
 )
@@ -97,6 +98,7 @@ app.include_router(riot_router)
 app.include_router(profile_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
+app.include_router(live_coach_router)
 app.include_router(websocket_router)
 app.include_router(champ_select_router)
 

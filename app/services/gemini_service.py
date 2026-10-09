@@ -107,6 +107,7 @@ class GeminiCoachService:
                     system_instruction=system_instruction,
                     temperature=0.3,
                     max_output_tokens=40,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
                 )
 
                 response = await client.aio.models.generate_content(
