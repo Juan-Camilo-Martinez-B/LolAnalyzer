@@ -155,7 +155,7 @@ class TestAuthentication:
         # Subsequent request with revoked token MUST fail with 401
         revoked_check = client.get("/api/auth/me", headers=headers)
         assert revoked_check.status_code == 401
-        assert "revoked" in revoked_check.json()["detail"].lower()
+        assert revoked_check.json()["code"] == "session_revoked"
 
     def test_refresh_token_rotation(self, client: TestClient):
         uid = uuid.uuid4().hex[:8]

@@ -25,6 +25,7 @@ from app.api import (
     ws_manager,
 )
 from app.core.config import settings
+from app.core.exceptions import install_exception_handlers
 from app.services.riot_lcu import riot_lcu_service
 
 # Logging Configuration
@@ -76,6 +77,7 @@ app = FastAPI(
     description="Real-Time Tactical Co-Pilot and In-Game Assistant Backend for League of Legends",
     lifespan=lifespan,
 )
+install_exception_handlers(app)
 
 _configured_origins = settings.ALLOWED_ORIGINS if isinstance(settings.ALLOWED_ORIGINS, list) else []
 _allowed_origins = [origin for origin in _configured_origins if origin and origin != "*"]
