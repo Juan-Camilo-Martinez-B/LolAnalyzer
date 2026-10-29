@@ -30,8 +30,13 @@ async def _row(db: AsyncSession, digest: str, purpose: str) -> AuthAttempt | Non
     return result.scalar_one_or_none()
 
 
+def _aware(value: datetime) -> datetime:
+    # SQLite devuelve fechas sin zona horaria aunque la columna la declare.
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def is_locked(row: AuthAttempt | None, now: datetime) -> bool:
-    return bool(row and row.locked_until and row.locked_until > now)
+    return bool(row and row.locked_until and _aware(row.locked_until) > now)
 
 
 async def assert_not_locked(db: AsyncSession, email: str, purpose: str) -> None:
@@ -54,7 +59,7 @@ async def register_failure(db: AsyncSession, email: str, purpose: str) -> None:
         row = AuthAttempt(subject_hash=digest, purpose=purpose, attempts=1, window_started=now)
         db.add(row)
     else:
-        if row.window_started < now - WINDOW:
+        if _aware(row.window_started) < now - WINDOW:
             row.attempts = 1
             row.window_started = now
             row.locked_until = None
