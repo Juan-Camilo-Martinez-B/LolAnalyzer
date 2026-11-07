@@ -8,6 +8,7 @@ from app.services.groq_coach import (
     DEFAULT_GROQ_MODEL,
     GROQ_CHAT_URL,
     GROQ_MAX_TOKENS,
+    REASONING_TOKEN_MARGIN,
     GROQ_TEMPERATURE,
     GroqCoach,
     resolve_groq_model,
@@ -79,8 +80,8 @@ def test_compact_prompt_keeps_metrics_and_drops_raw_json():
 
 def test_default_model_is_the_small_groq_model():
     assert resolve_groq_model(None, None) == DEFAULT_GROQ_MODEL
-    assert resolve_groq_model("", "  ") == "llama-3.1-8b-instant"
-    assert resolve_groq_model(None, "llama-3.1-8b-instant") == "llama-3.1-8b-instant"
+    assert resolve_groq_model("", "  ") == "openai/gpt-oss-20b"
+    assert resolve_groq_model(None, "openai/gpt-oss-120b") == "openai/gpt-oss-120b"
 
 
 def test_cache_skips_the_second_call_when_state_is_unchanged():
@@ -111,10 +112,25 @@ def test_cache_skips_the_second_call_when_state_is_unchanged():
     assert calls["n"] == 2
     assert text_c == text_a
     assert calls["url"] == GROQ_CHAT_URL
-    assert calls["payload"]["model"] == "llama-3.1-8b-instant"
+    assert calls["payload"]["model"] == "openai/gpt-oss-20b"
     assert calls["payload"]["temperature"] == GROQ_TEMPERATURE
-    assert calls["payload"]["max_tokens"] == GROQ_MAX_TOKENS
+    # gpt-oss reasons first, so it gets low effort and a margin over the answer cap.
+    assert calls["payload"]["reasoning_effort"] == "low"
+    assert calls["payload"]["max_tokens"] == GROQ_MAX_TOKENS + REASONING_TOKEN_MARGIN
     assert calls["payload"]["messages"][0]["content"] == COMPACT_SYSTEM_PROMPT
     assert "ZZZ" not in calls["payload"]["messages"][1]["content"]
     assert calls["headers"]["Authorization"] == "Bearer test-key"
     assert len(calls["payload"]["messages"]) == 2
+
+
+def test_non_reasoning_models_keep_the_plain_cap():
+    calls = {}
+
+    async def poster(url, payload, headers):
+        calls["payload"] = payload
+        return _Response("Juega seguro.")
+
+    coach = GroqCoach(api_key="test-key", model="some/plain-model", poster=poster)
+    asyncio.run(coach.advise(_trigger()))
+    assert calls["payload"]["max_tokens"] == GROQ_MAX_TOKENS
+    assert "reasoning_effort" not in calls["payload"]

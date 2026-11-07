@@ -6,6 +6,7 @@ Requests stay small: one stable system line, one metrics line, a low token cap,
 and an in-memory cache keyed by the board state.
 """
 
+import json
 import logging
 import re
 from typing import Any, Awaitable, Callable, Optional
@@ -19,9 +20,17 @@ from app.schemas.game_events import RuleTrigger
 logger = logging.getLogger("lol_analyzer.groq_coach")
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 GROQ_TEMPERATURE = 0.2
 GROQ_MAX_TOKENS = 48
+# gpt-oss models think before answering and that thinking counts toward max_tokens.
+# Low effort plus a fixed margin keeps the visible answer from coming back empty.
+REASONING_MODEL_PREFIXES = ("openai/gpt-oss",)
+REASONING_TOKEN_MARGIN = 400
+
+
+def is_reasoning_model(model: str) -> bool:
+    return model.startswith(REASONING_MODEL_PREFIXES)
 
 Poster = Callable[[str, dict[str, Any], dict[str, str]], Awaitable[Any]]
 
@@ -81,16 +90,46 @@ class GroqCoach:
         self._cache[state] = text
         return text
 
-    async def _complete(self, api_key: str, prompt: str) -> Optional[str]:
-        payload = {
+    async def complete_json(self, system: str, prompt: str, max_tokens: int) -> Optional[dict[str, Any]]:
+        """
+        One short JSON answer (post-match analysis, matchup plan).
+        Returns None without a key, on failure or when the reply is not a JSON object.
+        """
+        api_key = self._api_key()
+        if not api_key:
+            return None
+        raw = await self._complete(api_key, prompt, system=system, max_tokens=max_tokens, json_mode=True)
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.info("Groq returned text that is not JSON")
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    async def _complete(
+        self,
+        api_key: str,
+        prompt: str,
+        system: str = COMPACT_SYSTEM_PROMPT,
+        max_tokens: int = GROQ_MAX_TOKENS,
+        json_mode: bool = False,
+    ) -> Optional[str]:
+        payload: dict[str, Any] = {
             "model": self.model_name,
             "temperature": GROQ_TEMPERATURE,
-            "max_tokens": GROQ_MAX_TOKENS,
+            "max_tokens": max_tokens,
             "messages": [
-                {"role": "system", "content": COMPACT_SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        if is_reasoning_model(self.model_name):
+            payload["reasoning_effort"] = "low"
+            payload["max_tokens"] = max_tokens + REASONING_TOKEN_MARGIN
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
