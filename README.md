@@ -51,11 +51,13 @@ Solo se guardan y se muestran partidas de La Grieta del Invocador (colas 400, 42
 
 ## Runas y objetos
 
-Durante la selección de campeón el escritorio pide `GET /api/champ-select/loadout?champion_id=&champion_name=&position=` (con sesión):
+Durante la selección de campeón el escritorio pide `GET /api/champ-select/loadout?champion_id=&position=` (con sesión; `opponent_id` es opcional).
 
-- `runePages`: las páginas que recomienda el propio cliente de League (`/lol-perks/v1/recommended-pages/...`), con la posición pedida primero.
-- `build`: los objetos que más usaste con ese campeón en tus partidas de La Grieta guardadas en `local_match_history`. Sin partidas, la lista viene vacía.
+- **Fuente:** datos meta de OP.GG a través de su endpoint MCP público (`OPGG_MCP_URL`, sin clave). Si la selección ya muestra al rival de línea, se usa `lol_get_lane_matchup_guide` (runas, hechizos, objetos y un consejo contra ese campeón). Si no hay rival (partida de práctica, a ciegas o antes de que elija), se usa `lol_get_champion_analysis` con la build general de esa línea.
+- **Rival de línea:** las posiciones enemigas no son públicas, así que cada pick enemigo se ubica en la línea principal que recomienda el propio cliente (`recommended-pages`, `isDefaultPosition`) y se compara con la tuya. Sin línea asignada, se usa la línea principal de tu campeón.
+- **Respuesta:** `runePages` (la página meta primero y después las del cliente como alternativa), `itemBlocks` (Inicio, Build principal y Situacionales), hechizos, orden de habilidades y consejo. Si OP.GG no responde, quedan las runas del cliente y `notice` lo explica.
+- Las respuestas de OP.GG se guardan 30 minutos en memoria (`OPGG_CACHE_MINUTES`).
 
-`POST /api/champ-select/loadout/runes` crea la página "LolAnalyzer - <campeón>" y la deja activa. Si ya existía una de LolAnalyzer, la reemplaza; nunca borra páginas propias del jugador. Si no hay espacio, responde 409. También aplica los hechizos de invocador cuando la selección está abierta.
+`POST /api/champ-select/loadout/runes` crea la página "LolAnalyzer - <campeón>" y la deja activa, con los hechizos si la selección está abierta. Reemplaza la página anterior de LolAnalyzer; nunca borra páginas del jugador. Si no hay espacio, responde 409.
 
-`POST /api/champ-select/loadout/items` escribe el conjunto "LolAnalyzer - <campeón>" en el cliente, asociado al campeón y a La Grieta. Repetir la importación reemplaza ese conjunto.
+`POST /api/champ-select/loadout/items` recibe bloques (`title`, `item_ids`) y escribe el conjunto "LolAnalyzer - <campeón>" en la tienda, asociado al campeón y a La Grieta. Los objetos repetidos (dos pociones) pasan a ser una cantidad. Repetir la importación reemplaza ese conjunto.

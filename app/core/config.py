@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.1-8b-instant"
 
+    # OP.GG public MCP endpoint for meta runes, items and lane matchups. No key is needed.
+    OPGG_MCP_URL: str = "https://mcp-api.op.gg/mcp"
+    OPGG_TIMEOUT_SECONDS: float = 15.0
+    OPGG_CACHE_MINUTES: int = 30
+
     # Official Riot API key. Never expose this to the desktop client.
     # RSO (Riot Sign On) needs an approved production application and is not used here.
     RIOT_API_KEY: str = ""

@@ -1,25 +1,21 @@
 """
-Runes and item sets for champion select, read from and written to the local
-League client.
+Runes and item sets for champion select, written to the local League client.
 
-Runes come from the client's own recommended pages. Items come from the
-player's archived Summoner's Rift games with that champion. Both imports
-replace the page or set that LolAnalyzer wrote before, so repeating an import
-never piles up duplicates and never touches the player's own pages.
+The build comes from OP.GG meta data: against the lane opponent when champion
+select already shows them, otherwise the champion's general build for that
+lane (practice tool, blind pick or before the enemy picks). When OP.GG is not
+available, runes fall back to the client's own recommendations.
+
+Imports replace the page or set LolAnalyzer wrote before, so repeating an
+import never piles up duplicates and never touches the player's own pages.
 """
 
 from collections import Counter
-import json
 import logging
-import re
 import uuid
 from typing import Any, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.db.models import LocalMatchHistory
-from app.services.lcu_match_map import SUMMONERS_RIFT_QUEUES
+from app.services.opgg_meta import OpggUnavailable, opgg_champion_name, opgg_meta_client, opgg_position
 from app.services.riot_lcu import riot_lcu_service
 
 logger = logging.getLogger("lol_analyzer.loadout")
@@ -27,8 +23,6 @@ logger = logging.getLogger("lol_analyzer.loadout")
 PAGE_PREFIX = "LolAnalyzer"
 SET_PREFIX = "LolAnalyzer - "
 RIFT_MAP_ID = 11
-MAX_BUILD_ITEMS = 6
-HISTORY_SCAN_LIMIT = 200
 
 # Positions as the client names them in recommended-pages.
 POSITION_ALIASES = {
@@ -42,8 +36,14 @@ POSITION_ALIASES = {
     "UTILITY": "utility",
 }
 
-# Trinkets, wards and consumables say nothing about the build.
-NON_BUILD_ITEMS = {0, 2003, 2010, 2031, 2033, 2055, 2138, 2139, 2140, 3340, 3363, 3364}
+BLOCK_TITLES = {
+    "starter": "Inicio",
+    "core": "Build principal",
+    "situational": "Situacionales",
+}
+
+# Static client data does not change during a session.
+_static_cache: dict[str, Any] = {}
 
 
 class LoadoutError(Exception):
@@ -65,17 +65,39 @@ def client_position(raw: Optional[str]) -> Optional[str]:
     return POSITION_ALIASES.get(raw.strip().upper())
 
 
-def _champion_key(name: str) -> str:
-    """'Lee Sin', 'LeeSin' and "Kai'Sa" all compare equal."""
-    return re.sub(r"[^a-z0-9]", "", name.lower())
+def _canonical(position: Optional[str]) -> Optional[str]:
+    lane = client_position(position)
+    return lane.upper() if lane else None
 
 
-def _perk_view(perk: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": int(perk.get("id") or 0),
-        "name": perk.get("name") or "",
-        "iconPath": perk.get("iconPath") or "",
-    }
+async def _static(path: str) -> Any:
+    if path in _static_cache:
+        return _static_cache[path]
+    payload = await riot_lcu_service.get_json(path)
+    if payload:
+        _static_cache[path] = payload
+    return payload
+
+
+async def champion_names() -> dict[int, str]:
+    """Champion id -> display name ('Wukong', "Kai'Sa"), read from the client."""
+    payload = await _static("/lol-game-data/assets/v1/champion-summary.json")
+    names: dict[int, str] = {}
+    for champion in payload if isinstance(payload, list) else []:
+        champion_id = champion.get("id") if isinstance(champion, dict) else None
+        if isinstance(champion_id, int) and champion_id > 0 and champion.get("name"):
+            names[champion_id] = str(champion["name"])
+    return names
+
+
+async def perk_catalog() -> dict[int, dict[str, Any]]:
+    """Rune id -> name and icon, so OP.GG pages render like the client's."""
+    payload = await _static("/lol-perks/v1/perks")
+    catalog: dict[int, dict[str, Any]] = {}
+    for perk in payload if isinstance(payload, list) else []:
+        if isinstance(perk, dict) and isinstance(perk.get("id"), int):
+            catalog[perk["id"]] = {"id": perk["id"], "name": perk.get("name") or "", "iconPath": perk.get("iconPath") or ""}
+    return catalog
 
 
 def _page_view(page: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -83,10 +105,15 @@ def _page_view(page: dict[str, Any]) -> Optional[dict[str, Any]]:
     if len(perks) != 9:
         return None
     return {
+        "source": "client",
+        "label": "Recomendación del cliente",
         "position": str(page.get("position") or "").upper() or None,
         "primaryStyleId": int(page.get("primaryPerkStyleId") or 0),
         "subStyleId": int(page.get("secondaryPerkStyleId") or 0),
-        "perks": [_perk_view(perk) for perk in perks],
+        "perks": [
+            {"id": int(perk.get("id") or 0), "name": perk.get("name") or "", "iconPath": perk.get("iconPath") or ""}
+            for perk in perks
+        ],
         "summonerSpellIds": [int(spell) for spell in page.get("summonerSpellIds") or [] if isinstance(spell, int)],
         "isDefaultPosition": bool(page.get("isDefaultPosition")),
     }
@@ -111,38 +138,117 @@ async def recommended_rune_pages(champion_id: int, position: Optional[str]) -> l
             continue
         seen.add(signature)
         pages.append(view)
-    wanted = POSITION_ALIASES.get((position or "").upper(), "").upper()
+    wanted = _canonical(position) or ""
     pages.sort(key=lambda page: (page["position"] != wanted, not page["isDefaultPosition"]))
     return pages
 
 
-async def history_build(db: AsyncSession, user_id: int, champion_name: str) -> dict[str, Any]:
-    """Most frequent finished items in the player's Rift games with this champion."""
-    rows = await db.execute(
-        select(LocalMatchHistory.champion_name, LocalMatchHistory.items_json)
-        .where(
-            LocalMatchHistory.user_id == user_id,
-            LocalMatchHistory.queue_id.in_(SUMMONERS_RIFT_QUEUES)
-            | (LocalMatchHistory.game_mode == "CLASSIC"),
+async def default_position(champion_id: int) -> Optional[str]:
+    """The lane the client recommends first for a champion (TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY)."""
+    pages = await recommended_rune_pages(champion_id, None)
+    default = next((page for page in pages if page["isDefaultPosition"]), pages[0] if pages else None)
+    return default["position"] if default else None
+
+
+async def lane_opponent(my_lane: Optional[str]) -> Optional[int]:
+    """
+    Enemy champion that plays the same lane, read from the live champion select.
+    Enemy lanes are not public, so each enemy pick is placed on its usual lane.
+    """
+    wanted = _canonical(my_lane)
+    if not wanted:
+        return None
+    session = await riot_lcu_service.get_champ_select_session()
+    if not isinstance(session, dict):
+        return None
+    for enemy in session.get("theirTeam") or []:
+        champion_id = int(enemy.get("championId") or 0) if isinstance(enemy, dict) else 0
+        if champion_id <= 0:
+            continue
+        lane = _canonical(enemy.get("assignedPosition")) or await default_position(champion_id)
+        if lane == wanted:
+            return champion_id
+    return None
+
+
+async def meta_loadout(
+    champion_id: int,
+    position: Optional[str],
+    opponent_id: Optional[int] = None,
+) -> dict[str, Any]:
+    """
+    Meta build from OP.GG plus the client's pages as alternatives.
+    Without a known lane, the champion's usual lane is used.
+    """
+    names = await champion_names()
+    champion_name = names.get(champion_id)
+    lane = _canonical(position) or await default_position(champion_id)
+    if opponent_id is None:
+        opponent_id = await lane_opponent(lane)
+    opponent_name = names.get(opponent_id) if opponent_id else None
+
+    client_pages = await recommended_rune_pages(champion_id, lane)
+    result: dict[str, Any] = {
+        "championId": champion_id,
+        "championName": champion_name,
+        "position": lane,
+        "opponent": {"id": opponent_id, "name": opponent_name} if opponent_name else None,
+        "source": "client",
+        "runePages": client_pages,
+        "itemBlocks": [],
+        "summonerSpellIds": client_pages[0]["summonerSpellIds"] if client_pages else [],
+        "skillOrder": [],
+        "tip": None,
+        "notice": None,
+    }
+
+    opgg_lane = opgg_position(lane)
+    if not champion_name or not opgg_lane:
+        result["notice"] = "No se pudo saber la línea; se usan las recomendaciones del cliente."
+        return result
+
+    try:
+        build = await opgg_meta_client.build(
+            opgg_champion_name(champion_name),
+            opgg_lane,
+            opgg_champion_name(opponent_name) if opponent_name else None,
         )
-        .order_by(LocalMatchHistory.played_at.desc())
-        .limit(HISTORY_SCAN_LIMIT)
-    )
-    wanted = _champion_key(champion_name)
-    counts: Counter[int] = Counter()
-    games = 0
-    for name, items_json in rows.all():
-        if _champion_key(name or "") != wanted:
-            continue
-        games += 1
-        try:
-            items = json.loads(items_json or "[]")
-        except json.JSONDecodeError:
-            continue
-        # A repeated item in one game still counts as one vote.
-        counts.update({int(item) for item in items if isinstance(item, int) and item not in NON_BUILD_ITEMS})
-    item_ids = [item for item, _ in counts.most_common(MAX_BUILD_ITEMS)]
-    return {"games": games, "itemIds": item_ids}
+    except OpggUnavailable as exc:
+        logger.info("OP.GG build unavailable: %s", exc)
+        result["notice"] = "OP.GG no respondió; se usan las recomendaciones del cliente."
+        return result
+
+    catalog = await perk_catalog()
+    if build["runePage"]:
+        page = build["runePage"]
+        meta_page = {
+            "source": "opgg",
+            "label": f"Meta vs {opponent_name}" if opponent_name else "Meta general",
+            "position": lane,
+            "primaryStyleId": page["primaryStyleId"],
+            "subStyleId": page["subStyleId"],
+            "perks": [catalog.get(perk_id, {"id": perk_id, "name": "", "iconPath": ""}) for perk_id in page["perkIds"]],
+            "summonerSpellIds": build["summonerSpellIds"],
+            "isDefaultPosition": True,
+            "pickRate": page.get("pickRate"),
+        }
+        result["runePages"] = [meta_page, *client_pages]
+
+    vs = f" vs {opponent_name}" if opponent_name else ""
+    result.update({
+        "source": "opgg",
+        "itemBlocks": [
+            {
+                "title": BLOCK_TITLES.get(block["kind"], "Objetos") + ("" if block["kind"] == "situational" else vs),
+                "itemIds": block["itemIds"],
+            }
+            for block in build["itemBlocks"]
+        ],
+        "summonerSpellIds": build["summonerSpellIds"] or result["summonerSpellIds"],
+        "skillOrder": build["skillOrder"],
+        "tip": build["tip"],
+    })
+    return result
 
 
 async def import_rune_page(
@@ -193,7 +299,13 @@ async def apply_summoner_spells(spell_ids: list[int]) -> bool:
     return code in (200, 204)
 
 
-async def import_item_set(champion_id: int, champion_name: str, item_ids: list[int], games: int) -> dict[str, Any]:
+def _block_items(item_ids: list[int]) -> list[dict[str, Any]]:
+    """Repeated ids (two potions) become one entry with a count, in first-seen order."""
+    counts = Counter(item_ids)
+    return [{"id": str(item_id), "count": counts[item_id]} for item_id in dict.fromkeys(item_ids)]
+
+
+async def import_item_set(champion_id: int, champion_name: str, blocks: list[dict[str, Any]]) -> dict[str, Any]:
     """Writes one LolAnalyzer item set for the champion, replacing the earlier one."""
     summoner = await riot_lcu_service.get_current_summoner()
     summoner_id = (summoner or {}).get("summonerId") if isinstance(summoner, dict) else None
@@ -211,7 +323,16 @@ async def import_item_set(champion_id: int, champion_name: str, item_ids: list[i
         for item_set in document.get("itemSets") or []
         if isinstance(item_set, dict) and item_set.get("title") != title
     ]
-    label = f"Tu build habitual ({games} partidas)" if games else "Build sugerida"
+    new_blocks = [
+        {
+            "type": str(block["title"])[:60],
+            "items": _block_items(block["itemIds"]),
+            "hideIfSummonerSpell": "",
+            "showIfSummonerSpell": "",
+        }
+        for block in blocks
+        if block.get("itemIds")
+    ]
     kept.append({
         "uid": str(uuid.uuid4()),
         "title": title,
@@ -223,16 +344,11 @@ async def import_item_set(champion_id: int, champion_name: str, item_ids: list[i
         "preferredItemSlots": [],
         "sortrank": 0,
         "startedFrom": "blank",
-        "blocks": [{
-            "type": label,
-            "items": [{"id": str(item_id), "count": 1} for item_id in item_ids],
-            "hideIfSummonerSpell": "",
-            "showIfSummonerSpell": "",
-        }],
+        "blocks": new_blocks,
     })
     document["itemSets"] = kept
     code, _ = await riot_lcu_service.send("PUT", path, document)
     if code not in (200, 201, 204):
         logger.info("Item set import rejected with status %s", code)
         raise LoadoutError(502, "El cliente rechazó el conjunto de objetos.")
-    return {"title": title, "itemIds": item_ids}
+    return {"title": title, "blocks": len(new_blocks)}

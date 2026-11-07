@@ -9,19 +9,16 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
 from app.db.models import User
-from app.db.session import get_db
 from app.services.loadout import (
     LoadoutError,
     apply_summoner_spells,
     client_connected,
-    history_build,
     import_item_set,
     import_rune_page,
-    recommended_rune_pages,
+    meta_loadout,
 )
 from app.services.riot_lcu import riot_lcu_service
 
@@ -100,11 +97,15 @@ class RuneImportRequest(BaseModel):
     summoner_spell_ids: list[int] = Field(default_factory=list, max_length=2)
 
 
+class ItemBlock(BaseModel):
+    title: str = Field(..., min_length=1, max_length=60)
+    item_ids: list[int] = Field(..., min_length=1, max_length=12)
+
+
 class ItemImportRequest(BaseModel):
     champion_id: int = Field(..., ge=1, le=9999)
     champion_name: str = Field(..., min_length=1, max_length=40)
-    item_ids: list[int] = Field(..., min_length=1, max_length=8)
-    games: int = Field(default=0, ge=0, le=1000)
+    blocks: list[ItemBlock] = Field(..., min_length=1, max_length=6)
 
 
 def _raise_loadout(error: LoadoutError) -> None:
@@ -114,22 +115,23 @@ def _raise_loadout(error: LoadoutError) -> None:
 @router.get("/loadout")
 async def get_loadout(
     champion_id: int = Query(..., ge=1, le=9999),
-    champion_name: str = Query(..., min_length=1, max_length=40),
     position: Optional[str] = Query(default=None, max_length=12),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    opponent_id: Optional[int] = Query(default=None, ge=1, le=9999),
+    _current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Client rune recommendations plus the player's usual build for the champion."""
-    connected = await client_connected()
-    pages = await recommended_rune_pages(champion_id, position) if connected else []
-    build = await history_build(db, current_user.id, champion_name)
-    return {
-        "clientConnected": connected,
-        "championId": champion_id,
-        "championName": champion_name,
-        "runePages": pages,
-        "build": build,
-    }
+    """Meta runes and items from OP.GG (against the lane opponent when known), plus client pages."""
+    if not await client_connected():
+        return {
+            "clientConnected": False,
+            "championId": champion_id,
+            "runePages": [],
+            "itemBlocks": [],
+            "opponent": None,
+            "source": "none",
+            "notice": "Abre el cliente de League para ver runas y objetos.",
+        }
+    body = await meta_loadout(champion_id, position, opponent_id)
+    return {"clientConnected": True, **body}
 
 
 @router.post("/loadout/runes")
@@ -157,8 +159,9 @@ async def post_item_import(
     _current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Writes the item set to the client. Repeating it replaces the same set."""
+    blocks = [{"title": block.title.strip(), "itemIds": block.item_ids} for block in body.blocks]
     try:
-        item_set = await import_item_set(body.champion_id, body.champion_name.strip(), body.item_ids, body.games)
+        item_set = await import_item_set(body.champion_id, body.champion_name.strip(), blocks)
     except LoadoutError as error:
         _raise_loadout(error)
     return {"imported": True, "itemSet": item_set}
