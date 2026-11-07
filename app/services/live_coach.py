@@ -1,6 +1,10 @@
 """
-Turns the live match into coach advice. The desktop polls this; Gemini is
-called only when a rule fires or when a fresh tip is due.
+Turns the live match into coach advice. The desktop polls this.
+
+Situational rules (low health, mana, unspent gold, death timer, objectives,
+vision) answer first with tips built from the match numbers. Tilt and farming
+rules go through the language model (Groq, then Gemini, then a heuristic).
+When nothing relevant happens, the coach stays quiet instead of inventing a tip.
 """
 
 import asyncio
@@ -9,8 +13,9 @@ import time
 from typing import Any
 
 from app.engine.rules_evaluator import RulesEvaluator
+from app.engine.situations import SituationAdvice, SituationCoach, parse_situation
 from app.engine.sliding_window import SlidingWindowBuffer
-from app.schemas.game_events import Role, RuleSeverity, RuleTrigger, TriggerType
+from app.schemas.game_events import Role
 from app.services.coach_metrics import record_advice
 from app.services.gemini_service import gemini_coach_service
 from app.services.live_game import fetch_live_game, parse_live_game
@@ -18,7 +23,6 @@ from app.services.riot_lcu import riot_lcu_service
 
 logger = logging.getLogger("lol_analyzer.live_coach")
 
-TIP_GAP_SECONDS = 75.0
 CACHE_SECONDS = 4.0
 
 
@@ -35,21 +39,41 @@ class LiveCoach:
     def __init__(self) -> None:
         self.buffer = SlidingWindowBuffer()
         self.rules = RulesEvaluator()
+        self.situations = SituationCoach()
         self.seen_events: set[str] = set()
         self.last_advice: dict[str, Any] | None = None
-        self.last_tip_at = -9999.0
+        self._advice_count = 0
         self._last_game_time = 0.0
         self._lock = asyncio.Lock()
         self._cached_at = 0.0
         self._cached_body: dict[str, Any] | None = None
-        self._saved_key: tuple[int, str, float] | None = None
+        self._saved_key: int | None = None
+
+    def _publish(self, advice: dict[str, Any]) -> None:
+        self._advice_count += 1
+        advice["id"] = self._advice_count
+        self.last_advice = advice
+        logger.info("Live advice (%s): %s", advice.get("source"), advice.get("text"))
+
+    @staticmethod
+    def _situation_advice(tip: SituationAdvice, telemetry: Any) -> dict[str, Any]:
+        return {
+            "text": tip.text,
+            "severity": tip.severity,
+            "trigger": tip.key.upper(),
+            "category": tip.category,
+            "champion": telemetry.champion_name,
+            "role": telemetry.role.value if isinstance(telemetry.role, Role) else str(telemetry.role),
+            "gameTime": telemetry.game_time_seconds,
+            "source": "rules",
+        }
 
     def reset_match(self) -> None:
         self.buffer.reset()
         self.rules.reset()
+        self.situations.reset()
         self.seen_events.clear()
         self.last_advice = None
-        self.last_tip_at = -9999.0
         self._last_game_time = 0.0
 
     async def snapshot(self, db: Any = None, user_id: int | None = None) -> dict[str, Any]:
@@ -86,7 +110,7 @@ class LiveCoach:
                 "advice": self.last_advice if phase == "InProgress" else None,
             }
 
-        telemetry, events, _aliases = parsed
+        telemetry, events, aliases = parsed
         if telemetry.game_time_seconds + 15 < self._last_game_time:
             self.reset_match()
         self._last_game_time = telemetry.game_time_seconds
@@ -98,47 +122,34 @@ class LiveCoach:
             self.buffer.add_event(event)
         self.buffer.update_telemetry(telemetry)
 
-        trigger = self.rules.evaluate(self.buffer, telemetry)
-        if (
-            trigger is None
-            and telemetry.game_time_seconds >= 45
-            and telemetry.game_time_seconds - self.last_tip_at >= TIP_GAP_SECONDS
-        ):
-            trigger = RuleTrigger(
-                trigger_type=TriggerType.GENERAL_TACTICAL,
-                severity=RuleSeverity.INFO,
-                detected_at_game_time=telemetry.game_time_seconds,
-                reason=(
-                    f"Lectura en vivo de {telemetry.champion_name}: "
-                    f"{telemetry.kills}/{telemetry.deaths}/{telemetry.assists}, {telemetry.cs} CS."
-                ),
-                telemetry_snapshot=telemetry,
-            )
+        situation = parse_situation(payload, aliases) if payload else None
+        tip = self.situations.evaluate(situation) if situation else None
+        if tip is not None:
+            self._publish(self._situation_advice(tip, telemetry))
+        else:
+            trigger = self.rules.evaluate(self.buffer, telemetry)
+            if trigger is not None:
+                try:
+                    advice = await gemini_coach_service.generate_tactical_advice(trigger)
+                    self._publish({
+                        "text": advice.text,
+                        "severity": advice.severity.value,
+                        "trigger": advice.trigger_type.value,
+                        "category": "tilt" if advice.trigger_type.value == "TILT_RISK" else "farm",
+                        "champion": advice.champion_name,
+                        "role": advice.role.value,
+                        "gameTime": advice.game_time_seconds,
+                        "source": _advice_source(advice.generated_by),
+                    })
+                except Exception as error:
+                    logger.warning("Live advice failed: %s", error)
 
-        if trigger is not None:
-            self.last_tip_at = telemetry.game_time_seconds
+        if self.last_advice and self.last_advice.get("id") != self._saved_key and db is not None and user_id is not None:
             try:
-                advice = await gemini_coach_service.generate_tactical_advice(trigger)
-                source = _advice_source(advice.generated_by)
-                self.last_advice = {
-                    "text": advice.text,
-                    "severity": advice.severity.value,
-                    "trigger": advice.trigger_type.value,
-                    "champion": advice.champion_name,
-                    "role": advice.role.value,
-                    "gameTime": advice.game_time_seconds,
-                    "source": source,
-                }
-                saved_key = (user_id or 0, advice.text, advice.game_time_seconds)
-                if db is not None and user_id is not None and saved_key != self._saved_key:
-                    try:
-                        await record_advice(db, user_id, self.last_advice)
-                        self._saved_key = saved_key
-                    except Exception as save_error:
-                        logger.warning("Could not store live advice: %s", save_error)
-                logger.info("Live advice (%s): %s", source, advice.text)
-            except Exception as error:
-                logger.warning("Live advice failed: %s", error)
+                await record_advice(db, user_id, self.last_advice)
+                self._saved_key = self.last_advice.get("id")
+            except Exception as save_error:
+                logger.warning("Could not store live advice: %s", save_error)
 
         return {
             "in_game": True,

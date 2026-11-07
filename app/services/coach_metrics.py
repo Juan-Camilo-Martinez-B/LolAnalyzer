@@ -37,6 +37,12 @@ def summarize_advices(rows: list[CoachAdviceLog]) -> dict[str, Any]:
     }
 
 
+def _stored_source(source: Any) -> str:
+    """Known advisors keep their name; anything else is stored as heuristic."""
+    value = str(source or "")
+    return value if value in {"gemini", "groq", "rules", "heuristic"} else "heuristic"
+
+
 async def record_advice(db: AsyncSession, user_id: int, advice: dict[str, Any]) -> None:
     db.add(CoachAdviceLog(
         user_id=user_id,
@@ -46,7 +52,7 @@ async def record_advice(db: AsyncSession, user_id: int, advice: dict[str, Any]) 
         champion_name=str(advice.get("champion") or "Unknown")[:40],
         role=str(advice.get("role") or "UNKNOWN")[:20],
         game_time_seconds=float(advice.get("gameTime") or 0),
-        source="gemini" if advice.get("source") == "gemini" else "heuristic",
+        source=_stored_source(advice.get("source")),
     ))
     await db.flush()
 

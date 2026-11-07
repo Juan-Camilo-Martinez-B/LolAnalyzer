@@ -1,6 +1,26 @@
 # LolAnalyzer Backend
 
-API FastAPI del asistente. El coach en vivo usa Groq si `GROQ_API_KEY` está definida (modelo por defecto `llama-3.1-8b-instant`). Si no hay clave, usa un consejo heurístico. Gemini sigue en el código como respaldo opcional (`GEMINI_API_KEY`), pero la plantilla ya no lo trae. El prompt de Groq es una sola línea de métricas (campeón, fase, KDA, CS/min, muertes recientes) con tope de 48 tokens. No se reenvía el JSON de la partida.
+API FastAPI del asistente.
+
+## Coach en vivo
+
+`GET /api/coach/live` lee el Live Client (`127.0.0.1:2999`) y devuelve un consejo solo cuando pasa algo concreto. Si no pasa nada relevante, no inventa un consejo.
+
+Reglas de situación (`app/engine/situations.py`), con los números de la partida y sin modelo de lenguaje:
+
+| Situación | Cuándo | Ejemplo |
+| --- | --- | --- |
+| Vida baja | Menos de 30% durante 6 s, sin curarse | "Llevas 8 s con 22% de vida: vuelve a base y compra: tienes 1200 de oro." |
+| Muerte | Al morir con 8 s o más de reaparición | "Reapareces en 24 s. Aprovecha para comprar: tienes 1500 de oro." |
+| Objetivo cerca | 60 s antes del dragón (5:00, reaparece a los 5 min) o del Barón (20:00, 6 min) | "El dragón aparece en 0:55: empuja tu oleada y entra al río con visión." |
+| Objetivo tomado | Dragón, Barón, Heraldo o larvas, según el equipo | "El enemigo tomó el dragón Infernal. El próximo sale a las 10:30…" |
+| Sin maná | Menos de 15% durante 10 s (solo campeones con maná) | "Te queda 10% de maná: vuelve a base o juega pasivo…" |
+| Oro sin gastar | 1300 o más durante 40 s, desde el minuto 3 | "Tienes 1500 de oro sin gastar: empuja la oleada y vuelve a comprar." |
+| Visión baja | Desde el minuto 8, menos de 0.6 de visión por minuto | "Tu visión es baja (3 a los 12 min)…" |
+
+Cada regla tiene su enfriamiento y hay al menos 15 s entre consejos, salvo los urgentes (vida crítica y objetivos). Los objetivos anteriores a abrir la app sirven para los temporizadores, pero no se anuncian. Tilt y caída de CS siguen en `RulesEvaluator` y se redactan con Groq si `GROQ_API_KEY` está definida (modelo por defecto `llama-3.1-8b-instant`), con Gemini como respaldo opcional y, si no, con un texto heurístico. El prompt de Groq es una sola línea de métricas con tope de 48 tokens. No se reenvía el JSON de la partida.
+
+Cada consejo trae `category` (`recall`, `death`, `objective`, `economy`, `vision`, `tilt`, `farm`), que el escritorio usa para elegir el sonido, y se guarda en `coach_advice_logs` con su fuente (`rules`, `groq`, `gemini` o `heuristic`).
 
 ## Ejecutar
 
