@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from app.services.matchup_plan import matchup_plan
+from app.services.matchup_plan import matchup_plan_for
 from app.services.opgg_meta import OpggUnavailable, opgg_champion_name, opgg_meta_client, opgg_position
 from app.services.riot_lcu import riot_lcu_service
 
@@ -176,6 +176,7 @@ async def meta_loadout(
     champion_id: int,
     position: Optional[str],
     opponent_id: Optional[int] = None,
+    forward_token: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Meta build from OP.GG plus the client's pages as alternatives.
@@ -252,7 +253,7 @@ async def meta_loadout(
     })
     if opponent_name:
         # Only with a known rival, so the plan is about this exact matchup.
-        result["matchupPlan"] = await matchup_plan(champion_name, opponent_name, opgg_lane, build)
+        result["matchupPlan"] = await matchup_plan_for(champion_name, opponent_name, opgg_lane, build, forward_token)
     return result
 
 

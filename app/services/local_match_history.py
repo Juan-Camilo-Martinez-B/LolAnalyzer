@@ -154,11 +154,11 @@ async def _fetch_details(game_ids: list[str]) -> dict[str, dict[str, Any]]:
     return {game_id: detail for game_id, detail in fetched if isinstance(detail, dict)}
 
 
-async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Optional[list[dict[str, Any]]]:
+async def read_lcu_history(limit: int = 15, linked_puuid: Optional[str] = None) -> Optional[tuple[str, list[dict[str, Any]]]]:
     """
-    Returns mapped games when the local client answers.
-    Returns None when the client is closed or the logged-in account differs
-    from the linked one. It never links or unlinks accounts.
+    Reads and maps the open client's recent games: (client puuid, rows).
+    No database access, so the local agent can use it too.
+    Returns None when the client is closed or its account differs from linked_puuid.
     """
     try:
         connected = await riot_lcu_service.ensure_connection()
@@ -178,11 +178,10 @@ async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Opti
         return None
 
     client_puuid = summoner.get("puuid") if isinstance(summoner, dict) else None
-    linked = getattr(user, "riot_puuid", None)
-    if client_puuid and linked and client_puuid != linked:
+    if client_puuid and linked_puuid and client_puuid != linked_puuid:
         logger.info("Local client account does not match the linked Riot account.")
         return None
-    puuid = client_puuid or linked or ""
+    puuid = client_puuid or linked_puuid or ""
 
     pending_ids: list[str] = []
     for game in extract_games(payload):
@@ -195,7 +194,19 @@ async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Opti
             pending_ids.append(game_id)
 
     details = await _fetch_details(pending_ids)
-    mapped = map_lcu_history(payload, puuid, details)[:limit]
+    return puuid, map_lcu_history(payload, puuid, details)[:limit]
+
+
+async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Optional[list[dict[str, Any]]]:
+    """
+    Returns mapped games when the local client answers and stores them.
+    Returns None when the client is closed or the logged-in account differs
+    from the linked one. It never links or unlinks accounts.
+    """
+    result = await read_lcu_history(limit, getattr(user, "riot_puuid", None))
+    if result is None:
+        return None
+    _puuid, mapped = result
     if mapped:
         await save_local_matches(db, user.id, mapped, source="lcu")
     return mapped

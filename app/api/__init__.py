@@ -4,7 +4,8 @@ API module for LolAnalyzer Backend.
 
 from app.api.analysis import router as analysis_router
 from app.api.analytics import router as analytics_router
-from app.api.live_coach import router as live_coach_router
+from app.api.live_coach import history_router as coach_history_router
+from app.api.live_coach import live_router as live_coach_router
 from app.api.auth import router as auth_router
 from app.api.champ_select import router as champ_select_router
 from app.api.profile import router as profile_router
@@ -23,5 +24,6 @@ __all__ = [
     "analytics_router",
     "analysis_router",
     "live_coach_router",
+    "coach_history_router",
     "ws_manager",
 ]

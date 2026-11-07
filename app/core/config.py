@@ -30,10 +30,23 @@ class Settings(BaseSettings):
     HOST: str = "127.0.0.1"
     PORT: int = 8000
 
+    # Deployment mode:
+    #   full  - everything in one process (development).
+    #   cloud - Vercel: accounts, Riot API, history, analysis and AI. No League client access.
+    #   local - agent bundled in the desktop app: League client only, no secrets, no database.
+    APP_MODE: str = "full"
+    # Where the local agent forwards writes and AI requests (cloud API base URL).
+    CLOUD_API_URL: str = ""
+    # Random per-launch token the desktop sends to the local agent (X-Agent-Token).
+    AGENT_TOKEN: str = ""
+    # Serverless cold starts should not run create_all; migrations own the schema there.
+    INIT_DB_ON_STARTUP: bool = True
+
     # CORS Configuration
     ALLOWED_ORIGINS: Union[List[str], str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "app://lolanalyzer",
         "overwolf-extension://*"
     ]
 
@@ -122,6 +135,12 @@ class Settings(BaseSettings):
             return raw_url
         path = (_BACKEND_DIR / "lol_analyzer_cache.db").as_posix()
         return f"sqlite+aiosqlite:///{path}"
+
+
+    @property
+    def mode(self) -> str:
+        value = (self.APP_MODE or "full").strip().lower()
+        return value if value in {"full", "cloud", "local"} else "full"
 
 
 @lru_cache()

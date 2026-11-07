@@ -9,6 +9,8 @@ Plans are cached per champion, opponent and lane, so a matchup costs one call.
 import logging
 from typing import Any, Optional
 
+from app.core.config import settings
+from app.services.cloud_bridge import CloudUnavailable, cloud_post
 from app.services.groq_coach import groq_coach
 
 logger = logging.getLogger("lol_analyzer.matchup_plan")
@@ -97,3 +99,29 @@ async def matchup_plan(champion: str, opponent: str, lane: str, build: dict[str,
         return plan
     _cache[key] = plan
     return plan
+
+
+PLAN_FACT_KEYS = ("laneAdvantage", "soloKillAdvantage", "playStyle", "skillOrder", "tip")
+
+
+async def matchup_plan_for(
+    champion: str,
+    opponent: str,
+    lane: str,
+    build: dict[str, Any],
+    forward_token: Optional[str] = None,
+) -> dict[str, str]:
+    """Same plan everywhere: the local agent asks the cloud, the others call Groq here."""
+    if settings.mode != "local":
+        return await matchup_plan(champion, opponent, lane, build)
+    facts = {key: build.get(key) for key in PLAN_FACT_KEYS}
+    try:
+        reply = await cloud_post("/api/ai/matchup-plan", forward_token, {
+            "champion": champion, "opponent": opponent, "lane": lane, "facts": facts,
+        })
+    except CloudUnavailable as exc:
+        logger.info("Cloud matchup plan unavailable: %s", exc.message)
+        reply = None
+    if isinstance(reply, dict) and all(isinstance(reply.get(k), str) and reply.get(k) for k in ("lane", "fight", "avoid")):
+        return {k: str(reply[k])[:MAX_TEXT] for k in ("lane", "fight", "avoid")} | {"source": str(reply.get("source") or "groq")}
+    return {**rules_plan(champion, opponent, build), "source": "rules"}

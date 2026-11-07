@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from app.core.security import get_current_user
+from app.core.access import bearer_token, require_player
 from app.db.models import User
 from app.services.loadout import (
     LoadoutError,
@@ -121,7 +121,8 @@ async def get_loadout(
     champion_id: int = Query(..., ge=1, le=9999),
     position: Optional[str] = Query(default=None, max_length=12),
     opponent_id: Optional[int] = Query(default=None, ge=1, le=9999),
-    _current_user: User = Depends(get_current_user),
+    _player: Optional[User] = Depends(require_player),
+    forward_token: Optional[str] = Depends(bearer_token),
 ) -> Dict[str, Any]:
     """Meta runes and items from OP.GG (against the lane opponent when known), plus client pages."""
     if not await client_connected():
@@ -134,14 +135,14 @@ async def get_loadout(
             "source": "none",
             "notice": "Abre el cliente de League para ver runas y objetos.",
         }
-    body = await meta_loadout(champion_id, position, opponent_id)
+    body = await meta_loadout(champion_id, position, opponent_id, forward_token)
     return {"clientConnected": True, **body}
 
 
 @router.post("/loadout/runes")
 async def post_rune_import(
     body: RuneImportRequest,
-    _current_user: User = Depends(get_current_user),
+    _player: Optional[User] = Depends(require_player),
 ) -> Dict[str, Any]:
     """Writes the rune page to the client. Repeating it replaces the same page."""
     try:
@@ -159,7 +160,7 @@ async def post_rune_import(
 @router.post("/loadout/spells")
 async def post_spell_import(
     body: SpellImportRequest,
-    _current_user: User = Depends(get_current_user),
+    _player: Optional[User] = Depends(require_player),
 ) -> Dict[str, Any]:
     """Sets the summoner spells in champion select: spell_ids[0] on D, spell_ids[1] on F."""
     first, second = body.spell_ids
@@ -176,7 +177,7 @@ async def post_spell_import(
 @router.post("/loadout/items")
 async def post_item_import(
     body: ItemImportRequest,
-    _current_user: User = Depends(get_current_user),
+    _player: Optional[User] = Depends(require_player),
 ) -> Dict[str, Any]:
     """Writes the item set to the client. Repeating it replaces the same set."""
     blocks = [{"title": block.title.strip(), "itemIds": block.item_ids} for block in body.blocks]

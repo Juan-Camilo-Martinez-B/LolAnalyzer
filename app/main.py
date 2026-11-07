@@ -1,7 +1,12 @@
 """
-LolAnalyzer Backend - Main FastAPI Application
-Entry point for the backend server providing WebSocket streams for Overwolf overlay,
-REST endpoints for Champion Select, and asynchronous tactical co-pilot pipeline.
+LolAnalyzer Backend - FastAPI application factory.
+
+One codebase, three deployments (APP_MODE):
+  full  - everything in one process, for development.
+  cloud - Vercel: accounts, Riot API, stored history, analysis and AI. No League
+          client access, no WebSocket and no in-process state between requests.
+  local - the agent bundled in the desktop app: champion select, imports and the
+          live coach, reading the League client on 127.0.0.1. No secrets, no database.
 """
 
 from contextlib import asynccontextmanager
@@ -13,23 +18,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from app.api import (
-    analysis_router,
-    analytics_router,
-    auth_router,
-    champ_select_router,
-    profile_router,
-    riot_router,
-    stats_router,
-    live_coach_router,
-    websocket_router,
-    ws_manager,
-)
+from app.api.analysis import router as analysis_router
+from app.api.analytics import router as analytics_router
+from app.api.auth import router as auth_router
+from app.api.champ_select import router as champ_select_router
+from app.api.cloud_sync import router as cloud_sync_router
+from app.api.live_coach import history_router as coach_history_router
+from app.api.live_coach import live_router as coach_live_router
+from app.api.local_bridge import router as local_bridge_router
+from app.api.profile import router as profile_router
+from app.api.riot import router as riot_router
+from app.api.stats import router as stats_router
+from app.api.websocket import manager as ws_manager
+from app.api.websocket import router as websocket_router
 from app.core.config import settings
 from app.core.exceptions import install_exception_handlers
 from app.services.riot_lcu import riot_lcu_service
 
-# Logging Configuration
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -37,99 +42,116 @@ logging.basicConfig(
 )
 logger = logging.getLogger("lol_analyzer.main")
 
+ACCOUNT_ROUTERS = [
+    auth_router,
+    riot_router,
+    profile_router,
+    stats_router,
+    analytics_router,
+    analysis_router,
+    coach_history_router,
+    cloud_sync_router,
+]
+CLIENT_ROUTERS = [champ_select_router, coach_live_router, local_bridge_router]
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Manages application startup and graceful shutdown.
-    """
-    logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
-    logger.info(f"Host: {settings.HOST}:{settings.PORT} | Debug: {settings.DEBUG}")
-
-    # Initialize database tables
-    try:
-        from app.db.session import init_db
-        await init_db()
-    except Exception as e:
-        logger.error(f"Database initialization error: {e}")
-
-    # Attempt initial LCU discovery
-    if settings.LCU_AUTO_CONNECT:
-        try:
-            connected = await riot_lcu_service.ensure_connection()
-            if connected:
-                logger.info(f"Connected to local League Client on port {riot_lcu_service.port}")
-            else:
-                logger.info("League Client not currently detected. Will auto-discover upon launch.")
-        except Exception as e:
-            logger.debug(f"Initial LCU check skipped: {e}")
-
-    yield
-
-    # Shutdown logic
-    logger.info("Shutting down LolAnalyzer Backend...")
-    await riot_lcu_service.close()
-    logger.info("Shutdown complete.")
+ROUTERS_BY_MODE = {
+    "full": [*ACCOUNT_ROUTERS, *CLIENT_ROUTERS, websocket_router],
+    "cloud": ACCOUNT_ROUTERS,
+    "local": CLIENT_ROUTERS,
+}
 
 
-app = FastAPI(
-    title=settings.APP_NAME,
-    version=settings.APP_VERSION,
-    description="Real-Time Tactical Co-Pilot and In-Game Assistant Backend for League of Legends",
-    lifespan=lifespan,
-)
-install_exception_handlers(app)
+def _lifespan(mode: str):
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        logger.info("Starting %s v%s (%s mode)", settings.APP_NAME, settings.APP_VERSION, mode)
+        if mode != "local" and settings.INIT_DB_ON_STARTUP:
+            try:
+                from app.db.session import init_db
+                await init_db()
+            except Exception as exc:
+                logger.error("Database initialization error: %s", exc)
+        if mode != "cloud" and settings.LCU_AUTO_CONNECT:
+            try:
+                if await riot_lcu_service.ensure_connection():
+                    logger.info("Connected to local League Client on port %s", riot_lcu_service.port)
+                else:
+                    logger.info("League Client not currently detected. Will auto-discover upon launch.")
+            except Exception as exc:
+                logger.debug("Initial LCU check skipped: %s", exc)
+        yield
+        if mode != "cloud":
+            await riot_lcu_service.close()
+        logger.info("Shutdown complete.")
 
-_configured_origins = settings.ALLOWED_ORIGINS if isinstance(settings.ALLOWED_ORIGINS, list) else []
-_allowed_origins = [origin for origin in _configured_origins if origin and origin != "*"]
-if not _allowed_origins:
-    _allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
-
-# Credentials cannot be combined with a wildcard origin.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|overwolf-extension://.*",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include Routers
-app.include_router(auth_router)
-app.include_router(riot_router)
-app.include_router(profile_router)
-app.include_router(stats_router)
-app.include_router(analytics_router)
-app.include_router(analysis_router)
-app.include_router(live_coach_router)
-app.include_router(websocket_router)
-app.include_router(champ_select_router)
+    return lifespan
 
 
-@app.get("/", tags=["Health"])
-async def root() -> Dict[str, Any]:
-    """Root metadata endpoint."""
-    return {
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "status": "online",
-        "docs_url": "/docs",
-    }
+def _allowed_origins() -> list[str]:
+    configured = settings.ALLOWED_ORIGINS if isinstance(settings.ALLOWED_ORIGINS, list) else []
+    origins = [origin for origin in configured if origin and origin != "*"]
+    return origins or ["http://localhost:5173", "http://127.0.0.1:5173", "app://lolanalyzer"]
 
 
-@app.get("/health", tags=["Health"])
-async def health_check() -> Dict[str, Any]:
-    """Comprehensive health check endpoint."""
-    lcu_connected = await riot_lcu_service.ensure_connection()
-    return {
-        "status": "healthy",
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "active_ws_connections": len(ws_manager.active_connections),
-        "lcu_connected": lcu_connected,
-        "lcu_port": riot_lcu_service.port if lcu_connected else None,
-    }
+def create_app(mode: str | None = None) -> FastAPI:
+    """Builds the API for one deployment mode (defaults to APP_MODE)."""
+    chosen = (mode or settings.mode).lower()
+    if chosen not in ROUTERS_BY_MODE:
+        raise ValueError(f"Unknown APP_MODE: {chosen}")
+
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version=settings.APP_VERSION,
+        description="Real-Time Tactical Co-Pilot and In-Game Assistant Backend for League of Legends",
+        lifespan=_lifespan(chosen),
+    )
+    install_exception_handlers(app)
+
+    # Credentials cannot be combined with a wildcard origin.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins(),
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|overwolf-extension://.*",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    for router in ROUTERS_BY_MODE[chosen]:
+        app.include_router(router)
+
+    @app.get("/", tags=["Health"])
+    async def root() -> Dict[str, Any]:
+        return {
+            "app": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "mode": chosen,
+            "status": "online",
+            "docs_url": "/docs",
+        }
+
+    @app.get("/health", tags=["Health"])
+    async def health_check() -> Dict[str, Any]:
+        body: Dict[str, Any] = {
+            "status": "healthy",
+            "app": settings.APP_NAME,
+            "version": settings.APP_VERSION,
+            "mode": chosen,
+        }
+        if chosen == "cloud":
+            return body
+        lcu_connected = await riot_lcu_service.ensure_connection()
+        body.update({
+            "active_ws_connections": len(ws_manager.active_connections),
+            "lcu_connected": lcu_connected,
+            "lcu_port": riot_lcu_service.port if lcu_connected else None,
+        })
+        return body
+
+    return app
+
+
+app = create_app()
 
 
 if __name__ == "__main__":

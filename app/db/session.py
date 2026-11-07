@@ -4,6 +4,7 @@ Provides async SQLAlchemy engine and session factory supporting PostgreSQL in th
 and local SQLite fallback for isolated testing and development.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -100,9 +101,30 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+_cache_ready = False
+_cache_lock = asyncio.Lock()
+
+
+async def _ensure_cache_tables() -> None:
+    """
+    Creates riot_cache on first use. Serverless platforms may skip the startup
+    hook and only allow writes under /tmp, so the cache cannot rely on init_db.
+    """
+    global _cache_ready
+    if _cache_ready:
+        return
+    async with _cache_lock:
+        if _cache_ready:
+            return
+        async with cache_engine.begin() as conn:
+            await conn.run_sync(CacheBase.metadata.create_all)
+        _cache_ready = True
+
+
 @asynccontextmanager
 async def cache_session() -> AsyncGenerator[AsyncSession, None]:
     """Short session for riot_cache. Commits do not touch the account database."""
+    await _ensure_cache_tables()
     async with CacheSessionLocal() as session:
         try:
             yield session

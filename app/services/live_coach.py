@@ -16,6 +16,8 @@ from app.engine.rules_evaluator import RulesEvaluator
 from app.engine.situations import SituationAdvice, SituationCoach, parse_situation
 from app.engine.sliding_window import SlidingWindowBuffer
 from app.schemas.game_events import Role
+from app.core.config import settings
+from app.services.cloud_bridge import CloudUnavailable, cloud_post
 from app.services.coach_metrics import record_advice
 from app.services.gemini_service import gemini_coach_service
 from app.services.live_game import fetch_live_game, parse_live_game
@@ -43,11 +45,24 @@ class LiveCoach:
         self.seen_events: set[str] = set()
         self.last_advice: dict[str, Any] | None = None
         self._advice_count = 0
+        self._pending: set[asyncio.Task[None]] = set()
         self._last_game_time = 0.0
         self._lock = asyncio.Lock()
         self._cached_at = 0.0
         self._cached_body: dict[str, Any] | None = None
         self._saved_key: int | None = None
+
+    def _forward(self, advice: dict[str, Any], token: str) -> None:
+        """Fire-and-forget: a slow cloud must not delay the live HUD."""
+        async def send() -> None:
+            try:
+                await cloud_post("/api/coach/advice", token, advice)
+            except CloudUnavailable as exc:
+                logger.info("Could not store live advice in the cloud: %s", exc.message)
+
+        task = asyncio.create_task(send())
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
 
     def _publish(self, advice: dict[str, Any]) -> None:
         self._advice_count += 1
@@ -76,7 +91,7 @@ class LiveCoach:
         self.last_advice = None
         self._last_game_time = 0.0
 
-    async def snapshot(self, db: Any = None, user_id: int | None = None) -> dict[str, Any]:
+    async def snapshot(self, db: Any = None, user_id: int | None = None, forward_token: str | None = None) -> dict[str, Any]:
         now = time.monotonic()
         if self._cached_body is not None and (now - self._cached_at) < CACHE_SECONDS:
             return self._cached_body
@@ -85,12 +100,12 @@ class LiveCoach:
             now = time.monotonic()
             if self._cached_body is not None and (now - self._cached_at) < CACHE_SECONDS:
                 return self._cached_body
-            body = await self._read(db, user_id)
+            body = await self._read(db, user_id, forward_token)
             self._cached_body = body
             self._cached_at = time.monotonic()
             return body
 
-    async def _read(self, db: Any = None, user_id: int | None = None) -> dict[str, Any]:
+    async def _read(self, db: Any = None, user_id: int | None = None, forward_token: str | None = None) -> dict[str, Any]:
         phase = "None"
         try:
             phase = await riot_lcu_service.get_gameflow_phase() or "None"
@@ -144,7 +159,11 @@ class LiveCoach:
                 except Exception as error:
                     logger.warning("Live advice failed: %s", error)
 
-        if self.last_advice and self.last_advice.get("id") != self._saved_key and db is not None and user_id is not None:
+        if self.last_advice and self.last_advice.get("id") != self._saved_key and settings.mode == "local" and forward_token:
+            # The agent has no database: the cloud stores the tip on the account.
+            self._saved_key = self.last_advice.get("id")
+            self._forward(dict(self.last_advice), forward_token)
+        elif self.last_advice and self.last_advice.get("id") != self._saved_key and db is not None and user_id is not None:
             try:
                 await record_advice(db, user_id, self.last_advice)
                 self._saved_key = self.last_advice.get("id")
