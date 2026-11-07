@@ -38,12 +38,47 @@ Cada consejo trae `category` (`recall`, `death`, `objective`, `economy`, `vision
 ## Ejecutar
 
 ```powershell
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 copy .env.example .env
 uvicorn app.main:app --reload
 ```
 
 `GET /health` responde aunque el cliente de League no esté abierto.
+
+## Despliegue: nube y agente local
+
+El mismo código se despliega de tres formas según `APP_MODE`:
+
+| Modo | Dónde corre | Qué expone |
+| --- | --- | --- |
+| `full` (por defecto) | Tu PC, en desarrollo | Todo |
+| `cloud` | Vercel | Cuentas, perfil, API de Riot, historial guardado, análisis post-partida, métricas del coach y plan de línea con IA |
+| `local` | Dentro del ejecutable de escritorio (`lolanalyzer-agent.exe`) | Selección de campeón, importación de runas, objetos y hechizos, coach en vivo e historial leído del cliente |
+
+La nube no puede leer el cliente de League (vive en `127.0.0.1` del jugador) y Vercel no guarda estado entre peticiones ni admite WebSocket. Por eso esas partes van en el agente local. El agente **no lleva claves ni la URL de la base de datos**: guarda el historial, registra los consejos y pide el plan de línea a la nube con el JWT del jugador (`/api/history/import`, `/api/coach/advice`, `/api/ai/matchup-plan`).
+
+**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Se cierra solo si el proceso de escritorio desaparece.
+
+### Vercel (modo nube)
+
+`api/index.py` crea la app en modo nube y `vercel.json` envía todas las rutas allí. `.vercelignore` deja fuera `.env`, bases de datos, pruebas y el agente.
+
+```bash
+npx vercel link
+npx vercel env add DATABASE_URL production
+npx vercel --prod
+```
+
+Variables en Vercel: `DATABASE_URL` (pooler de Supabase, puerto 6543), `SECRET_KEY`, `GROQ_API_KEY`, `GROQ_MODEL`, `RIOT_API_KEY` y `ALLOWED_ORIGINS` (`app://lolanalyzer` para el escritorio, más el dominio de la web). El esquema lo crean las migraciones del repositorio de BD: en Vercel `INIT_DB_ON_STARTUP` queda en `false`, y el caché de Riot es un SQLite en `/tmp` que se crea solo.
+
+### Agente local (PyInstaller)
+
+```bash
+python -m pip install -r requirements-dev.txt
+python agent/build_agent.py
+```
+
+El resultado es `dist/lolanalyzer-agent/lolanalyzer-agent.exe`, que el instalador de escritorio copia dentro de la app. No incluye `.env`, bases de datos ni pruebas. Para probarlo a mano: `LOLANALYZER_AGENT_TOKEN=<token de 64 caracteres> dist/lolanalyzer-agent/lolanalyzer-agent.exe` (puerto `8765` por defecto).
 
 ## Variables
 

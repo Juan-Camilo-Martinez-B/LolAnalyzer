@@ -1,0 +1,13 @@
+# Only the cloud API ships to Vercel.
+.env
+.env.*
+!.env.example
+*.db
+.pytest_cache/
+__pycache__/
+tests/
+scripts/
+agent/
+build/
+dist/
+*.spec
