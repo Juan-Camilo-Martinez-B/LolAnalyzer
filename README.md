@@ -18,7 +18,7 @@ Reglas de situación (`app/engine/situations.py`), con los números de la partid
 | Oro sin gastar | 1300 o más durante 40 s, desde el minuto 3 | "Tienes 1500 de oro sin gastar: empuja la oleada y vuelve a comprar." |
 | Visión baja | Desde el minuto 8, menos de 0.6 de visión por minuto | "Tu visión es baja (3 a los 12 min)…" |
 
-Cada regla tiene su enfriamiento y hay al menos 15 s entre consejos, salvo los urgentes (vida crítica y objetivos). Los objetivos anteriores a abrir la app sirven para los temporizadores, pero no se anuncian. Tilt y caída de CS siguen en `RulesEvaluator` y se redactan con Groq si `GROQ_API_KEY` está definida (modelo por defecto `llama-3.1-8b-instant`), con Gemini como respaldo opcional y, si no, con un texto heurístico. El prompt de Groq es una sola línea de métricas con tope de 48 tokens. No se reenvía el JSON de la partida.
+Cada regla tiene su enfriamiento y hay al menos 15 s entre consejos, salvo los urgentes (vida crítica y objetivos). Los objetivos anteriores a abrir la app sirven para los temporizadores, pero no se anuncian. Tilt y caída de CS siguen en `RulesEvaluator` y se redactan con Groq si `GROQ_API_KEY` está definida (modelo por defecto `openai/gpt-oss-20b`), con Gemini como respaldo opcional y, si no, con un texto heurístico. El prompt de Groq es una sola línea de métricas con tope de 48 tokens. No se reenvía el JSON de la partida.
 
 Cada consejo trae `category` (`recall`, `death`, `objective`, `economy`, `vision`, `tilt`, `farm`), que el escritorio usa para elegir el sonido, y se guarda en `coach_advice_logs` con su fuente (`rules`, `groq`, `gemini` o `heuristic`).
 
@@ -41,7 +41,7 @@ Copia `.env.example`. No subas `.env`.
 - `ALLOWED_ORIGINS`: orígenes del desktop, separados por coma. No uses `*`.
 - `RIOT_API_KEY`: clave de desarrollador de [developer.riotgames.com](https://developer.riotgames.com/). Solo vive en el servidor. El historial no la necesita si el cliente local ya sincronizó.
 - `GROQ_API_KEY`: clave de Groq. Solo vive en el servidor. No la pongas en el cliente.
-- `GROQ_MODEL`: modelo de Groq. Por defecto `llama-3.1-8b-instant`.
+- `GROQ_MODEL`: modelo de Groq. Por defecto `openai/gpt-oss-20b`. Los modelos `gpt-oss` razonan antes de responder: el backend les pide `reasoning_effort: low` y suma 400 tokens de margen, para que la respuesta no llegue vacía.
 
 Riot Sign On (RSO) es el login oficial del jugador, pero Riot solo lo entrega a aplicaciones de producción aprobadas. En local la cuenta se vincula con el Riot ID (`nombre#tag`) y la API oficial (`account-v1`, `summoner-v4`, `league-v4`, `match-v5`). Nunca se pide la contraseña de Riot.
 
@@ -69,6 +69,16 @@ Las partidas se leen primero del cliente de League (`/lol-match-history/v1/produ
 
 Solo se guardan y se muestran partidas de La Grieta del Invocador (colas 400, 420, 430, 440, 490 y 700, o modo `CLASSIC`). ARAM, Arena y URF se omiten sin borrar filas. `GET /api/riot/profile` lee nivel y rango del cliente abierto solo si su cuenta es la vinculada; si no, usa la API de Riot. El cliente nunca vincula ni desvincula cuentas por su cuenta: `POST /api/riot/connect` lo usa solo cuando el Riot ID pedido coincide, y un Riot ID que ya tiene otro usuario responde 409.
 
+## Análisis post-partida
+
+Al terminar cada partida el escritorio llama a `POST /api/analysis/latest`. El backend sincroniza el historial del cliente y analiza la última partida de La Grieta de las últimas 6 horas (las de menos de 5 minutos, como los remakes, se ignoran). Usa el resumen final de la partida, no la telemetría en vivo:
+
+- Las métricas se calculan aquí frente a una referencia por rol: CS/min, visión/min, muertes cada 10 min, KDA, daño/min y oro/min. Cada una trae valor, meta y veredicto.
+- Groq solo redacta tres frases (`strengths`, `improvements`, `focus`) a partir de una línea con esas métricas: unos 280 tokens de entrada y 220 de salida. Sin clave o si falla, las mismas tres frases salen de reglas (`source: "rules"`).
+- Se guarda en `match_analyses` con clave única por usuario y partida, así cada partida se analiza y se cobra una sola vez.
+
+`GET /api/analysis/{match_id}` devuelve el análisis guardado (404 si no hay) y `POST /api/analysis/{match_id}` analiza una partida antigua a pedido.
+
 ## Runas y objetos
 
 Durante la selección de campeón el escritorio pide `GET /api/champ-select/loadout?champion_id=&position=` (con sesión; `opponent_id` es opcional).
@@ -77,6 +87,7 @@ Durante la selección de campeón el escritorio pide `GET /api/champ-select/load
 - **Rival de línea:** las posiciones enemigas no son públicas, así que cada pick enemigo se ubica en la línea principal que recomienda el propio cliente (`recommended-pages`, `isDefaultPosition`) y se compara con la tuya. Sin línea asignada, se usa la línea principal de tu campeón.
 - **Respuesta:** `runePages` (la página meta primero y después las del cliente como alternativa), `itemBlocks` (Inicio, Build principal y Situacionales), hechizos, orden de habilidades y consejo. Si OP.GG no responde, quedan las runas del cliente y `notice` lo explica.
 - Las respuestas de OP.GG se guardan 30 minutos en memoria (`OPGG_CACHE_MINUTES`).
+- **Plan de línea (`matchupPlan`):** solo cuando se conoce al rival. Groq convierte los datos del matchup (consejo de OP.GG, ventaja de línea, asesinatos en solitario y estilo recomendado) en tres frases: `lane`, `fight` y `avoid`. Se cachea por campeón, rival y línea, así un matchup cuesta una sola llamada. Sin Groq, el plan sale de esos mismos datos.
 
 `POST /api/champ-select/loadout/runes` crea la página "LolAnalyzer - <campeón>" y la deja activa. Reemplaza la página anterior de LolAnalyzer; nunca borra páginas del jugador. Si no hay espacio, responde 409.
 

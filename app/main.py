@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.api import (
+    analysis_router,
     analytics_router,
     auth_router,
     champ_select_router,
@@ -100,6 +101,7 @@ app.include_router(riot_router)
 app.include_router(profile_router)
 app.include_router(stats_router)
 app.include_router(analytics_router)
+app.include_router(analysis_router)
 app.include_router(live_coach_router)
 app.include_router(websocket_router)
 app.include_router(champ_select_router)

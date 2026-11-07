@@ -2,6 +2,7 @@
 API module for LolAnalyzer Backend.
 """
 
+from app.api.analysis import router as analysis_router
 from app.api.analytics import router as analytics_router
 from app.api.live_coach import router as live_coach_router
 from app.api.auth import router as auth_router
@@ -20,6 +21,7 @@ __all__ = [
     "riot_router",
     "stats_router",
     "analytics_router",
+    "analysis_router",
     "live_coach_router",
     "ws_manager",
 ]

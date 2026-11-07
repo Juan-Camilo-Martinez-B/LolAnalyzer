@@ -247,3 +247,30 @@ class LocalMatchHistory(Base):
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="lcu")
 
     user: Mapped["User"] = relationship("User")
+
+
+class MatchAnalysis(Base):
+    """
+    One post-match analysis per user and game, written from the final summary.
+    The unique key keeps a game from being analysed (and billed) twice.
+    """
+
+    __tablename__ = "match_analyses"
+    __table_args__ = (
+        UniqueConstraint("user_id", "external_match_id", name="uq_match_analysis_user_game"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    external_match_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    champion_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
+    win: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    metrics_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    strengths: Mapped[str] = mapped_column(String(300), nullable=False)
+    improvements: Mapped[str] = mapped_column(String(300), nullable=False)
+    focus: Mapped[str] = mapped_column(String(300), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="rules")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
