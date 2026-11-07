@@ -100,7 +100,17 @@ async def recommended_rune_pages(champion_id: int, position: Optional[str]) -> l
     )
     if not isinstance(payload, list):
         return []
-    pages = [view for view in (_page_view(page) for page in payload if isinstance(page, dict)) if view]
+    pages: list[dict[str, Any]] = []
+    seen: set[tuple[int, ...]] = set()
+    for view in (_page_view(page) for page in payload if isinstance(page, dict)):
+        if not view:
+            continue
+        # The client repeats identical pages under different recommendation ids.
+        signature = (view["primaryStyleId"], view["subStyleId"], *(perk["id"] for perk in view["perks"]))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        pages.append(view)
     wanted = POSITION_ALIASES.get((position or "").upper(), "").upper()
     pages.sort(key=lambda page: (page["position"] != wanted, not page["isDefaultPosition"]))
     return pages

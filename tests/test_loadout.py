@@ -97,6 +97,19 @@ def test_recommended_pages_put_the_requested_position_first(fake_client):
     assert len(pages[0]["perks"]) == 9
 
 
+def test_recommended_pages_drop_identical_copies(monkeypatch):
+    fake = FakeClient()
+    original = fake.get_json
+
+    async def doubled(path):
+        payload = await original(path)
+        return payload + payload if isinstance(payload, list) and "recommended-pages" in path else payload
+
+    fake.get_json = doubled
+    monkeypatch.setattr(loadout, "riot_lcu_service", fake)
+    assert len(asyncio.run(loadout.recommended_rune_pages(157, "TOP"))) == 2
+
+
 def _headers(client: TestClient) -> dict[str, str]:
     response = client.post(
         "/api/auth/register",
