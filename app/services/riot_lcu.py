@@ -198,6 +198,31 @@ class RiotLCUService:
             logger.debug("LCU %s failed: %s", path, type(exc).__name__)
         return None
 
+    async def send(self, method: str, path: str, payload: Any = None) -> Tuple[int, Any]:
+        """
+        Write call against the local client. Returns (status, body).
+        Status 0 means the client is closed or the request never reached it.
+        """
+        if not await self.ensure_connection():
+            return 0, None
+        client = self._loopback_client()
+        if client is None:
+            return 0, None
+        try:
+            response = await client.request(method, path, json=payload)
+        except Exception as exc:
+            logger.info("LCU %s %s failed: %s", method, path, type(exc).__name__)
+            return 0, None
+        try:
+            body = response.json() if response.content else None
+        except ValueError:
+            body = None
+        return response.status_code, body
+
+    async def get_json(self, path: str) -> Optional[Any]:
+        """Public read for services that need a specific client route."""
+        return await self._get_json(path)
+
     async def get_current_ranked_stats(self) -> Optional[Dict[str, Any]]:
         """GET /lol-ranked/v1/current-ranked-stats"""
         payload = await self._get_json("/lol-ranked/v1/current-ranked-stats")
