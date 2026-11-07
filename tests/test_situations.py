@@ -122,5 +122,73 @@ def test_parse_reads_health_mana_death_and_objective_side():
     assert parsed.health_ratio == 0.25 and parsed.mana_ratio == 0.1
     assert parsed.gold == 812 and parsed.ward_score == 6.5
     assert parsed.objective_events == [
-        {"id": "9", "name": "DragonKill", "time": 400.0, "ally": False, "dragon": "Water", "stolen": False}
+        {"id": "9", "name": "DragonKill", "time": 400.0, "ally": False, "mine": False, "dragon": "Water", "stolen": False}
+    ]
+
+
+def test_multikills_praise_the_best_streak_of_the_snapshot():
+    coach = SituationCoach()
+    events = [
+        {"id": "20", "kind": "multikill", "time": 700.0, "value": 2},
+        {"id": "21", "kind": "multikill", "time": 702.0, "value": 3},
+    ]
+    tip = coach.evaluate(situation(704, praise_events=events))
+    assert tip.category == "praise" and tip.text.startswith("¡Triple asesinato!")
+    penta = [*events, {"id": "23", "kind": "multikill", "time": 709.0, "value": 5}]
+    # Praise is not held back by the gap between tips: a penta right after a triple still shows.
+    assert coach.evaluate(situation(710, praise_events=penta)).text.startswith("¡PENTAKILL!")
+    assert coach.evaluate(situation(714, praise_events=penta)) is None
+
+
+def test_first_blood_ace_and_towers_are_praised():
+    coach = SituationCoach()
+    first = coach.evaluate(situation(180, praise_events=[{"id": "1", "kind": "first_blood", "time": 178.0, "value": 0}]))
+    assert first.text.startswith("¡Primera sangre!")
+    tower = coach.evaluate(situation(900, praise_events=[{"id": "2", "kind": "turret", "time": 899.0, "value": 0}]))
+    assert tower.text.startswith("¡Torre derribada!")
+    ace = coach.evaluate(situation(1300, praise_events=[{"id": "3", "kind": "ace", "time": 1299.0, "value": 0}]))
+    assert ace.text.startswith("¡Ace!")
+
+
+def test_securing_the_dragon_yourself_is_congratulated():
+    coach = SituationCoach()
+    event = {"id": "8", "name": "DragonKill", "time": 330.0, "ally": True, "mine": True, "dragon": "Fire", "stolen": True}
+    tip = coach.evaluate(situation(332, objective_events=[event]))
+    assert tip.text.startswith("¡Bien jugado! Aseguraste el dragón Infernal (robado).")
+
+
+def test_farming_praise_tiers_from_minute_ten():
+    coach = SituationCoach()
+    assert coach.evaluate(situation(540, creep_score=100)) is None  # minute 9: too early
+    near = coach.evaluate(situation(600, creep_score=92))
+    assert near.text.startswith("Farmeo casi perfecto: 9.2 CS/min a los 10 min")
+    # Reaching a better tier is praised right away; staying in it waits five minutes.
+    perfect = coach.evaluate(situation(640, creep_score=108))
+    assert perfect.text.startswith("¡Farmeo perfecto! 10.1 CS/min")
+    assert coach.evaluate(situation(700, creep_score=118)) is None
+    beyond = coach.evaluate(situation(720, creep_score=134))
+    assert beyond.text.startswith("¡Farmeo más que perfecto! 11.2 CS/min")
+
+
+def test_parse_reads_multikills_first_blood_and_my_towers():
+    payload = {
+        "activePlayer": {"riotIdGameName": "Me", "championStats": {}},
+        "allPlayers": [
+            {"riotIdGameName": "Me", "team": "ORDER", "scores": {"creepScore": 150}},
+            {"riotIdGameName": "Foe", "team": "CHAOS"},
+        ],
+        "events": {"Events": [
+            {"EventID": 1, "EventName": "FirstBlood", "EventTime": 200, "Recipient": "Me"},
+            {"EventID": 2, "EventName": "Multikill", "EventTime": 400, "KillerName": "Me", "KillStreak": 3},
+            {"EventID": 3, "EventName": "Multikill", "EventTime": 410, "KillerName": "Foe", "KillStreak": 2},
+            {"EventID": 4, "EventName": "TurretKilled", "EventTime": 500, "KillerName": "Minion_T100", "Assisters": ["Me"]},
+            {"EventID": 5, "EventName": "Ace", "EventTime": 600, "AcingTeam": "ORDER"},
+            {"EventID": 6, "EventName": "Ace", "EventTime": 650, "AcingTeam": "CHAOS"},
+        ]},
+        "gameData": {"gameTime": 660},
+    }
+    parsed = parse_situation(payload, {"Me"})
+    assert parsed.creep_score == 150
+    assert [(event["kind"], event["value"]) for event in parsed.praise_events] == [
+        ("first_blood", 0), ("multikill", 3), ("turret", 0), ("ace", 0),
     ]

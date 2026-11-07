@@ -18,6 +18,19 @@ Reglas de situación (`app/engine/situations.py`), con los números de la partid
 | Oro sin gastar | 1300 o más durante 40 s, desde el minuto 3 | "Tienes 1500 de oro sin gastar: empuja la oleada y vuelve a comprar." |
 | Visión baja | Desde el minuto 8, menos de 0.6 de visión por minuto | "Tu visión es baja (3 a los 12 min)…" |
 
+El coach también felicita las buenas jugadas (`category: "praise"`):
+
+| Jugada | Cuándo | Ejemplo |
+| --- | --- | --- |
+| Multiasesinato | Evento `Multikill` tuyo; si llegan varios juntos, gana el mayor | "¡Triple asesinato! Dominas la pelea…" / "¡PENTAKILL!…" |
+| Primera sangre | Evento `FirstBlood` con tu nombre | "¡Primera sangre! Buen inicio…" |
+| Ace | Tu equipo elimina a los cinco rivales | "¡Ace! Tu equipo eliminó a los cinco rivales…" |
+| Torre o inhibidor | Lo destruyes o asistes | "¡Torre derribada!…" |
+| Objetivo propio | Tú das el golpe final al dragón o al Barón | "¡Bien jugado! Aseguraste el dragón Infernal…" |
+| Farmeo | Desde el minuto 10: 9 CS/min casi perfecto, 10 perfecto, 11 o más, más que perfecto | "¡Farmeo perfecto! 10.1 CS/min a los 11 min…" |
+
+Las felicitaciones de jugadas salen al instante, sin esperar los 15 s entre consejos. La de farmeo se repite al subir de nivel o cada 5 minutos si se mantiene.
+
 Cada regla tiene su enfriamiento y hay al menos 15 s entre consejos, salvo los urgentes (vida crítica y objetivos). Los objetivos anteriores a abrir la app sirven para los temporizadores, pero no se anuncian. Tilt y caída de CS siguen en `RulesEvaluator` y se redactan con Groq si `GROQ_API_KEY` está definida (modelo por defecto `openai/gpt-oss-20b`), con Gemini como respaldo opcional y, si no, con un texto heurístico. El prompt de Groq es una sola línea de métricas con tope de 48 tokens. No se reenvía el JSON de la partida.
 
 Cada consejo trae `category` (`recall`, `death`, `objective`, `economy`, `vision`, `tilt`, `farm`), que el escritorio usa para elegir el sonido, y se guarda en `coach_advice_logs` con su fuente (`rules`, `groq`, `gemini` o `heuristic`).

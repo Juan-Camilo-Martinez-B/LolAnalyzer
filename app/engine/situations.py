@@ -6,7 +6,8 @@ objective events) and keeps a little state between polls, so advice is about
 sustained situations ("22% health for 8 s") instead of a single frame.
 
 Every tip is built from the numbers of the match, in Spanish, without a
-language model, so it never invents a situation.
+language model, so it never invents a situation. Good plays get praise the same
+way: multikills, first blood, aces, towers, objectives and near-perfect farming.
 """
 
 from dataclasses import dataclass, field
@@ -34,6 +35,23 @@ SHOPPING_GOLD = 900
 VISION_PER_MINUTE = 0.6
 MIN_GAP_SECONDS = 15.0
 
+# Farming praise: 10 CS/min is perfect. Checked from minute 10 so early numbers do not mislead.
+CS_PRAISE_FROM_SECONDS = 10 * 60
+CS_TIERS = (
+    (11.0, "more_than_perfect"),
+    (10.0, "perfect"),
+    (9.0, "near_perfect"),
+)
+CS_TIER_RANK = {"near_perfect": 1, "perfect": 2, "more_than_perfect": 3}
+CS_PRAISE_REPEAT_SECONDS = 300.0
+
+MULTIKILL_TEXT = {
+    2: "¡Asesinato doble! Bien ejecutado: aprovecha la ventaja para empujar o tomar un objetivo.",
+    3: "¡Triple asesinato! Dominas la pelea: conviértelo en una torre o un dragón.",
+    4: "¡Asesinato cuádruple! La partida está en tus manos: agrupa y ve por un objetivo grande.",
+    5: "¡PENTAKILL! Jugada perfecta: es el momento de ir por el Barón o el nexo.",
+}
+
 COOLDOWNS = {
     "recall": 40.0,
     "mana": 90.0,
@@ -42,6 +60,8 @@ COOLDOWNS = {
     "objective_soon": 0.0,
     "objective_taken": 0.0,
     "vision": 180.0,
+    "praise": 0.0,
+    "cs_praise": 0.0,
 }
 
 DRAGON_NAMES = {
@@ -68,6 +88,9 @@ class LiveSituation:
     respawn_seconds: float
     ward_score: float
     objective_events: list[dict[str, Any]] = field(default_factory=list)
+    creep_score: int = 0
+    # Good plays by the local player or their team (multikills, first blood, ace, towers).
+    praise_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -117,22 +140,36 @@ def parse_situation(payload: dict[str, Any], aliases: set[str]) -> Optional[Live
     }
 
     objectives = []
+    praise = []
     events = payload.get("events") if isinstance(payload.get("events"), dict) else {}
     for raw in events.get("Events") or []:
         if not isinstance(raw, dict):
             continue
         name = raw.get("EventName")
-        if name not in ("DragonKill", "BaronKill", "HeraldKill", "HordeKill"):
-            continue
+        event_id = str(raw.get("EventID"))
+        time = float(raw.get("EventTime") or 0)
         killer = str(raw.get("KillerName") or "")
-        objectives.append({
-            "id": str(raw.get("EventID")),
-            "name": name,
-            "time": float(raw.get("EventTime") or 0),
-            "ally": bool(team) and teams.get(killer) == team,
-            "dragon": str(raw.get("DragonType") or ""),
-            "stolen": str(raw.get("Stolen") or "").lower() == "true",
-        })
+        assisters = {str(item) for item in raw.get("Assisters") or []}
+        mine = killer in aliases
+        if name in ("DragonKill", "BaronKill", "HeraldKill", "HordeKill"):
+            objectives.append({
+                "id": event_id,
+                "name": name,
+                "time": time,
+                "ally": bool(team) and teams.get(killer) == team,
+                "mine": mine,
+                "dragon": str(raw.get("DragonType") or ""),
+                "stolen": str(raw.get("Stolen") or "").lower() == "true",
+            })
+        elif name == "Multikill" and mine:
+            praise.append({"id": event_id, "kind": "multikill", "time": time, "value": int(raw.get("KillStreak") or 0)})
+        elif name == "FirstBlood" and str(raw.get("Recipient") or "") in aliases:
+            praise.append({"id": event_id, "kind": "first_blood", "time": time, "value": 0})
+        elif name == "Ace" and team and str(raw.get("AcingTeam") or "") == team:
+            praise.append({"id": event_id, "kind": "ace", "time": time, "value": 0})
+        elif name in ("TurretKilled", "InhibKilled") and (mine or assisters & aliases):
+            kind = "turret" if name == "TurretKilled" else "inhibitor"
+            praise.append({"id": event_id, "kind": kind, "time": time, "value": 0})
 
     mana = None
     if str(stats.get("resourceType") or "").upper() == "MANA":
@@ -150,6 +187,8 @@ def parse_situation(payload: dict[str, Any], aliases: set[str]) -> Optional[Live
         respawn_seconds=float(me.get("respawnTimer") or 0),
         ward_score=float(scores.get("wardScore") or 0),
         objective_events=objectives,
+        creep_score=int(scores.get("creepScore") or 0),
+        praise_events=praise,
     )
 
 
@@ -172,6 +211,9 @@ class SituationCoach:
         self.announced: set[str] = set()
         self.last_fired: dict[str, float] = {}
         self.last_any: float = -9999.0
+        self.seen_praise: set[str] = set()
+        self.cs_tier: Optional[str] = None
+        self.cs_tier_at: float = -9999.0
 
     # ------------------------------------------------------------------ helpers
 
@@ -229,7 +271,8 @@ class SituationCoach:
                     "Aprovecha la ventaja: presiona torres o invade."
                     if event["ally"] else "Juega del lado opuesto: placas, oleadas o el campamento enemigo."
                 )
-                text = f"{who} tomó {label}{stolen}. El próximo sale a las {clock(self.next_dragon)}. {follow}"
+                lead = f"¡Bien jugado! Aseguraste {label}{stolen}." if event.get("mine") else f"{who} tomó {label}{stolen}."
+                text = f"{lead} El próximo sale a las {clock(self.next_dragon)}. {follow}"
             elif event["name"] == "BaronKill":
                 self.next_baron = event["time"] + BARON_RESPAWN
                 self.announced.discard("baron")
@@ -237,7 +280,8 @@ class SituationCoach:
                     "Agrupa y asedia con la mejora del Barón."
                     if event["ally"] else "No pelees en campo abierto: defiende bajo torre y despeja oleadas."
                 )
-                text = f"{who} tomó el Barón{stolen}. {follow}"
+                lead = f"¡Bien jugado! Aseguraste el Barón{stolen}." if event.get("mine") else f"{who} tomó el Barón{stolen}."
+                text = f"{lead} {follow}"
             elif event["name"] == "HeraldKill":
                 text = f"{who} tomó el Heraldo{stolen}." + (
                     " Úsalo en una línea con torre débil." if event["ally"] else " Cuida tu torre exterior."
@@ -274,6 +318,60 @@ class SituationCoach:
                 )
         return None
 
+    def _praise(self, situation: LiveSituation) -> Optional[SituationAdvice]:
+        """The best good play of this snapshot: a penta beats a double, a multikill beats a tower."""
+        fresh = []
+        for event in situation.praise_events:
+            if event["id"] in self.seen_praise:
+                continue
+            self.seen_praise.add(event["id"])
+            if situation.game_time - event["time"] <= STALE_EVENT_SECONDS:
+                fresh.append(event)
+        if not fresh:
+            return None
+        multikills = [event for event in fresh if event["kind"] == "multikill" and event["value"] >= 2]
+        if multikills:
+            streak = min(5, max(event["value"] for event in multikills))
+            text = MULTIKILL_TEXT[streak]
+        else:
+            kinds = {event["kind"] for event in fresh}
+            if "first_blood" in kinds:
+                text = "¡Primera sangre! Buen inicio: usa ese oro extra en tu próxima compra."
+            elif "ace" in kinds:
+                text = "¡Ace! Tu equipo eliminó a los cinco rivales: toma torres o un objetivo ahora."
+            elif "inhibitor" in kinds:
+                text = "¡Inhibidor destruido! Presiona con los súbditos súper y no te sobreextiendas."
+            else:
+                text = "¡Torre derribada! Rota a otra línea o ayuda a tu jungla con el siguiente objetivo."
+        return self._fire("praise", situation.game_time, "praise", "INFO", text)
+
+    def _cs_praise(self, situation: LiveSituation) -> Optional[SituationAdvice]:
+        """Near-perfect (9), perfect (10) or more than perfect (11+) CS per minute, from minute 10."""
+        now = situation.game_time
+        if now < CS_PRAISE_FROM_SECONDS:
+            return None
+        per_minute = situation.creep_score / (now / 60)
+        tier = next((name for limit, name in CS_TIERS if per_minute >= limit), None)
+        if tier is None:
+            self.cs_tier = None
+            return None
+        improved = CS_TIER_RANK[tier] > CS_TIER_RANK.get(self.cs_tier or "", 0)
+        if not improved and now - self.cs_tier_at < CS_PRAISE_REPEAT_SECONDS:
+            return None
+        if not self._ready("cs_praise", now):
+            return None
+        self.cs_tier = tier
+        self.cs_tier_at = now
+        minutes = int(now // 60)
+        rate = f"{per_minute:.1f} CS/min a los {minutes} min"
+        if tier == "more_than_perfect":
+            text = f"¡Farmeo más que perfecto! {rate}: estás por encima del estándar profesional."
+        elif tier == "perfect":
+            text = f"¡Farmeo perfecto! {rate}: sigue así y convierte el oro en ventaja."
+        else:
+            text = f"Farmeo casi perfecto: {rate}, a un paso del perfecto (10)."
+        return self._fire("cs_praise", now, "praise", "INFO", text)
+
     # --------------------------------------------------------------- evaluate
 
     def evaluate(self, situation: LiveSituation) -> Optional[SituationAdvice]:
@@ -284,6 +382,10 @@ class SituationCoach:
         taken = self._objective_taken(situation)
         if taken:
             return taken
+
+        praise = self._praise(situation)
+        if praise:
+            return praise
 
         just_died = situation.is_dead and not self.was_dead
         self.was_dead = situation.is_dead
@@ -329,6 +431,10 @@ class SituationCoach:
                     "gold", now, "economy", "INFO",
                     f"Tienes {situation.gold} de oro sin gastar: empuja la oleada y vuelve a comprar.",
                 )
+
+        cs_praise = self._cs_praise(situation)
+        if cs_praise:
+            return cs_praise
 
         minutes = now / 60
         if minutes >= 8 and situation.ward_score < minutes * VISION_PER_MINUTE and self._ready("vision", now):

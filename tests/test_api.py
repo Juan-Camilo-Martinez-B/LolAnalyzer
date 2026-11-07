@@ -39,7 +39,12 @@ def test_champ_select_status(client: TestClient):
     assert "connected" in data
 
 
-def test_champ_select_session_when_offline(client: TestClient):
+def test_champ_select_session_when_offline(client: TestClient, monkeypatch):
+    # A League client open on this machine must not change the result.
+    async def no_session():
+        return None
+
+    monkeypatch.setattr("app.api.champ_select.riot_lcu_service.get_champ_select_session", no_session)
     response = client.get("/api/champ-select/session")
     assert response.status_code == 200
     data = response.json()
