@@ -175,6 +175,42 @@ class RiotLCUService:
 
         return None
 
+    def _loopback_client(self) -> Optional[httpx.AsyncClient]:
+        """LCU calls stay on 127.0.0.1. Certificate checks are skipped only for that host."""
+        client = self._get_client()
+        host = str(client.base_url)
+        if not (host.startswith("https://127.0.0.1") or host.startswith("http://127.0.0.1")):
+            logger.warning("Refusing LCU request that is not aimed at 127.0.0.1")
+            return None
+        return client
+
+    async def _get_json(self, path: str) -> Optional[Any]:
+        if not await self.ensure_connection():
+            return None
+        client = self._loopback_client()
+        if client is None:
+            return None
+        try:
+            response = await client.get(path)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as exc:
+            logger.debug("LCU %s failed: %s", path, type(exc).__name__)
+        return None
+
+    async def get_current_match_history(self) -> Optional[Dict[str, Any]]:
+        """GET /lol-match-history/v1/products/lol/current-summoner/matches"""
+        payload = await self._get_json("/lol-match-history/v1/products/lol/current-summoner/matches")
+        return payload if isinstance(payload, dict) else None
+
+    async def get_match_history_game(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """GET /lol-match-history/v1/games/{gameId}. The id must be numeric."""
+        token = str(game_id)
+        if not token.isdigit():
+            return None
+        payload = await self._get_json(f"/lol-match-history/v1/games/{token}")
+        return payload if isinstance(payload, dict) else None
+
     async def close(self) -> None:
         """Closes any open async HTTP client sessions."""
         if self._client and not self._client.is_closed:

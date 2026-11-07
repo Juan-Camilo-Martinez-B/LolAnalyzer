@@ -4,9 +4,13 @@ Manages environment variables, server settings, database connections, and securi
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# app/core/config.py -> backend root
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -35,6 +39,8 @@ class Settings(BaseSettings):
 
     # Database Configuration (PostgreSQL Cloud / SQLite async fallback)
     DATABASE_URL: str = ""
+    # Tests can point this at another sqlite file. It never accepts Postgres.
+    CACHE_DATABASE_URL: str = ""
     DB_ECHO: bool = False
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
@@ -51,6 +57,10 @@ class Settings(BaseSettings):
     # Google Gemini AI Configuration
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL_NAME: str = "gemini-1.5-flash"
+
+    # Groq (OpenAI-compatible). The key stays on the server and is never hardcoded.
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
 
     # Official Riot API key. Never expose this to the desktop client.
     # RSO (Riot Sign On) needs an approved production application and is not used here.
@@ -93,6 +103,20 @@ class Settings(BaseSettings):
             return raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
         return raw_url
+
+    @property
+    def cache_database_url(self) -> str:
+        """
+        Local SQLite file for Riot profile, match and Data Dragon cache.
+        Account tables never live here, even when DATABASE_URL is empty.
+        """
+        raw_url = self.CACHE_DATABASE_URL.strip() if self.CACHE_DATABASE_URL else ""
+        if raw_url:
+            if not raw_url.startswith("sqlite"):
+                raise ValueError("Riot cache must use a local SQLite database.")
+            return raw_url
+        path = (_BACKEND_DIR / "lol_analyzer_cache.db").as_posix()
+        return f"sqlite+aiosqlite:///{path}"
 
 
 @lru_cache()

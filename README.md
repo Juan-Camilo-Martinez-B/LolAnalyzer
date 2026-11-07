@@ -1,6 +1,6 @@
 # LolAnalyzer Backend
 
-API FastAPI del asistente. La capa de IA (Gemini) sigue en el código y no se invoca desde el flujo de cuenta ni desde Riot.
+API FastAPI del asistente. El coach en vivo usa Groq si `GROQ_API_KEY` está definida (modelo por defecto `llama-3.1-8b-instant`). Si no hay clave, sigue Gemini y, si tampoco, un consejo heurístico. El prompt de Groq es una sola línea de métricas (campeón, fase, KDA, CS/min, muertes recientes) con tope de 48 tokens. No se reenvía el JSON de la partida.
 
 ## Ejecutar
 
@@ -19,7 +19,9 @@ Copia `.env.example`. No subas `.env`.
 - `DATABASE_URL`: Postgres/Supabase. Vacío usa SQLite local.
 - `SECRET_KEY`: firma JWT. Cámbiala fuera de desarrollo.
 - `ALLOWED_ORIGINS`: orígenes del desktop, separados por coma. No uses `*`.
-- `RIOT_API_KEY`: clave de desarrollador de [developer.riotgames.com](https://developer.riotgames.com/). Solo vive en el servidor.
+- `RIOT_API_KEY`: clave de desarrollador de [developer.riotgames.com](https://developer.riotgames.com/). Solo vive en el servidor. El historial no la necesita si el cliente local ya sincronizó.
+- `GROQ_API_KEY`: clave de Groq. Solo vive en el servidor. No la pongas en el cliente.
+- `GROQ_MODEL`: modelo de Groq. Por defecto `llama-3.1-8b-instant`.
 
 Riot Sign On (RSO) es el login oficial del jugador, pero Riot solo lo entrega a aplicaciones de producción aprobadas. En local la cuenta se vincula con el Riot ID (`nombre#tag`) y la API oficial (`account-v1`, `summoner-v4`, `league-v4`, `match-v5`). Nunca se pide la contraseña de Riot.
 
@@ -43,4 +45,4 @@ Riot Sign On (RSO) es el login oficial del jugador, pero Riot solo lo entrega a 
 
 Las contraseñas y las respuestas de recuperación se guardan con Bcrypt. Tras 5 fallos hay un bloqueo de 15 minutos. Cambiar la contraseña invalida los JWT anteriores (`session_version`).
 
-Las partidas de Riot se consultan bajo demanda y se cachean unos minutos en `riot_cache`. No se copian a `match_records`.
+Las partidas se leen primero del cliente de League (`/lol-match-history/v1/products/lol/current-summoner/matches` y, si hace falta el detalle, `/lol-match-history/v1/games/{gameId}`), con el lockfile del cliente y solo contra `127.0.0.1`. El resumen se guarda en `local_match_history`. Si el cliente está cerrado, `GET /api/riot/matches` devuelve esa tabla. La API de Riot (`match-v5`) solo se usa cuando no hay archivo local; si además falta o caducó la clave, la ruta responde el error de Riot de siempre. `riot_cache` sigue siendo un caché corto y `match_records` no se toca.

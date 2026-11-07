@@ -22,6 +22,15 @@ TIP_GAP_SECONDS = 75.0
 CACHE_SECONDS = 4.0
 
 
+def _advice_source(generated_by: str) -> str:
+    label = generated_by.lower()
+    if "heuristic" in label:
+        return "heuristic"
+    if label.startswith("llama") or "groq" in label:
+        return "groq"
+    return "gemini"
+
+
 class LiveCoach:
     def __init__(self) -> None:
         self.buffer = SlidingWindowBuffer()
@@ -110,7 +119,7 @@ class LiveCoach:
             self.last_tip_at = telemetry.game_time_seconds
             try:
                 advice = await gemini_coach_service.generate_tactical_advice(trigger)
-                source = "heuristic" if "heuristic" in advice.generated_by else "gemini"
+                source = _advice_source(advice.generated_by)
                 self.last_advice = {
                     "text": advice.text,
                     "severity": advice.severity.value,

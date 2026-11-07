@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.session import Base
+from app.db.session import Base, CacheBase
 
 
 def utc_now() -> datetime:
@@ -108,7 +108,7 @@ class AuthAttempt(Base):
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class RiotCacheEntry(Base):
+class RiotCacheEntry(CacheBase):
     """Short-lived Riot API cache. Rows expire by TTL and are not a match archive."""
     __tablename__ = "riot_cache"
 
@@ -207,3 +207,43 @@ class MatchTelemetryPoint(Base):
 
     # Relationships
     match: Mapped["MatchRecord"] = relationship("MatchRecord", back_populates="telemetry_points")
+
+
+class LocalMatchHistory(Base):
+    """
+    Match summaries read from the local League client (or a Riot fallback).
+    They stay available after the client closes and after a development key expires.
+    This table does not replace match_records.
+    """
+
+    __tablename__ = "local_match_history"
+    __table_args__ = (
+        UniqueConstraint("user_id", "external_match_id", name="uq_local_match_user_game"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    external_match_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    champion_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
+    kills: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    deaths: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    assists: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    kda: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    cs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cs_per_min: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    win: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    queue_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    game_mode: Mapped[str] = mapped_column(String(40), nullable=False, default="CLASSIC")
+    gold_earned: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    vision_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    damage_dealt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    items_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    trinket_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="lcu")
+
+    user: Mapped["User"] = relationship("User")

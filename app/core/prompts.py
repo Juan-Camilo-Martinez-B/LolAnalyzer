@@ -87,3 +87,65 @@ def build_trigger_prompt(trigger: RuleTrigger) -> str:
 
     lines.append("\nGenera tu instrucción imperativa de MÁXIMO 12 palabras:")
     return "\n".join(lines)
+
+
+# Short and stable. Role essays and match JSON stay out of the Groq request.
+COMPACT_SYSTEM_PROMPT = (
+    "Coach de League of Legends. Una orden imperativa en español, máximo 12 palabras. "
+    "Sin saludo ni explicación."
+)
+
+
+def _short_metric(value: object, limit: int = 16) -> str | None:
+    """Keeps a single token. Dicts, lists, and long strings are dropped."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if not isinstance(value, (str, int, float)):
+        return None
+    text = str(value).strip()
+    if not text or len(text) > limit:
+        return None
+    return text
+
+
+def _cs_per_minute(telemetry: PlayerTelemetry) -> float:
+    minutes = telemetry.game_time_seconds / 60 if telemetry.game_time_seconds > 0 else 0
+    if minutes <= 0:
+        return 0.0
+    return round(telemetry.cs / minutes, 1)
+
+
+def coach_state_key(trigger: RuleTrigger) -> str:
+    """
+    Identity of the advice request. Gold, raw events, and match JSON do not
+    change the key, so an unchanged board does not call the model again.
+    """
+    telemetry = trigger.telemetry_snapshot
+    phase = _short_metric(trigger.context_data.get("phase")) or "live"
+    recent = _short_metric(trigger.context_data.get("recent_deaths")) or "na"
+    return "|".join(
+        [
+            telemetry.champion_name,
+            phase,
+            f"{telemetry.kills}/{telemetry.deaths}/{telemetry.assists}",
+            f"{_cs_per_minute(telemetry)}",
+            recent,
+            trigger.trigger_type.value,
+        ]
+    )
+
+
+def build_compact_coach_prompt(trigger: RuleTrigger) -> str:
+    """
+    Metrics only: champion, phase, KDA, CS/min, recent deaths, and the alert.
+    Never serializes context_data or a match payload.
+    """
+    telemetry = trigger.telemetry_snapshot
+    phase = _short_metric(trigger.context_data.get("phase")) or "live"
+    recent = _short_metric(trigger.context_data.get("recent_deaths")) or "na"
+    return (
+        f"champ={telemetry.champion_name} role={telemetry.role.value} phase={phase} "
+        f"kda={telemetry.kills}/{telemetry.deaths}/{telemetry.assists} "
+        f"cs/min={_cs_per_minute(telemetry)} recent_deaths={recent} "
+        f"alert={trigger.trigger_type.value}"
+    )

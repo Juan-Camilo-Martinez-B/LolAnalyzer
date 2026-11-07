@@ -1,9 +1,11 @@
 """
 Riot account link and on-demand public data.
-Match rows returned here are not persisted in match_records.
+Match history prefers the local League client and is stored in local_match_history.
+The Riot match-v5 API is only a fallback when that archive is empty.
 """
 
 from datetime import datetime, timezone
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,6 +17,7 @@ from app.core.security import get_current_user
 from app.db.models import User
 from app.db.session import get_db
 from app.services.champion_catalog import get_champion_catalog
+from app.services.local_match_history import load_local_matches, save_local_matches, sync_lcu_history
 from app.services.riot_api import (
     PLATFORM_TO_REGION,
     RiotUnavailable,
@@ -27,6 +30,7 @@ from app.services.riot_api import (
 )
 
 router = APIRouter(prefix="/api/riot", tags=["Riot"])
+logger = logging.getLogger("lol_analyzer.riot_routes")
 
 
 class RiotConnectRequest(BaseModel):
@@ -217,11 +221,28 @@ async def riot_matches(
     puuid = _require_link(current_user)
     platform = current_user.region or "la1"
     try:
+        synced = await sync_lcu_history(db, current_user, limit=count)
+    except Exception as exc:
+        logger.info("Local history sync failed: %s", type(exc).__name__)
+        synced = None
+    if synced:
+        return synced[:count]
+
+    stored = await load_local_matches(db, current_user.id, count)
+    if stored:
+        return stored
+
+    try:
         match_ids = await recent_match_ids(db, platform, puuid, count)
         matches = []
         for match_id in match_ids:
             detail = await match_detail(db, platform, match_id)
             matches.append(_map_match(detail, puuid))
+        if matches:
+            try:
+                await save_local_matches(db, current_user.id, matches, source="riot")
+            except Exception as exc:
+                logger.info("Could not archive Riot matches: %s", type(exc).__name__)
         return matches
     except RiotUnavailable as error:
         raise_riot(error)

@@ -7,10 +7,15 @@ import pytest
 # Las variables de entorno tienen prioridad sobre .env en pydantic-settings,
 # y esto corre antes de que cualquier prueba importe la app.
 TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test_lol_analyzer.db"
+TEST_CACHE_PATH = Path(__file__).resolve().parent.parent / "test_lol_analyzer_cache.db"
 if TEST_DB_PATH.exists():
     TEST_DB_PATH.unlink()
+if TEST_CACHE_PATH.exists():
+    TEST_CACHE_PATH.unlink()
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{TEST_DB_PATH.as_posix()}"
+os.environ["CACHE_DATABASE_URL"] = f"sqlite+aiosqlite:///{TEST_CACHE_PATH.as_posix()}"
 os.environ["LCU_AUTO_CONNECT"] = "False"
+os.environ["GROQ_API_KEY"] = ""
 
 
 @pytest.fixture(autouse=True)
@@ -21,3 +26,13 @@ def offline_champion_catalog(monkeypatch):
 
     monkeypatch.setattr("app.api.auth.get_champion_catalog", fake_catalog)
     monkeypatch.setattr("app.api.riot.get_champion_catalog", fake_catalog)
+
+
+@pytest.fixture(autouse=True)
+def lcu_history_offline(monkeypatch):
+    """API tests must not read a League client that happens to be open."""
+
+    async def _offline(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.api.riot.sync_lcu_history", _offline)

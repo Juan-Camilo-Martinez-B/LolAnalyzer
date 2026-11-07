@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.core.prompts import build_trigger_prompt, get_system_prompt_for_role
+from app.services.groq_coach import groq_coach
 from app.schemas.game_events import (
     CoachAdvice,
     PlayerTelemetry,
@@ -94,6 +95,25 @@ class GeminiCoachService:
         """
         t = trigger.telemetry_snapshot
         advice_id = str(uuid.uuid4())[:8]
+
+        # Groq is preferred when GROQ_API_KEY is set. Same state skips the network.
+        try:
+            groq_text = await groq_coach.advise(trigger)
+        except Exception as error:
+            logger.warning("Groq coach failed (%s). Trying the next advisor.", type(error).__name__)
+            groq_text = None
+        if groq_text:
+            return CoachAdvice(
+                advice_id=advice_id,
+                trigger_type=trigger.trigger_type,
+                severity=trigger.severity,
+                text=groq_text,
+                role=t.role,
+                champion_name=t.champion_name,
+                game_time_seconds=t.game_time_seconds,
+                generated_by=groq_coach.model_name,
+            )
+
         client = self._get_client()
 
         # If AI client is active, attempt Gemini 1.5 Flash generation
