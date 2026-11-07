@@ -4,6 +4,7 @@ Manages environment variables, server settings, database connections, and securi
 """
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import List, Union
 from pydantic import field_validator
@@ -133,6 +134,9 @@ class Settings(BaseSettings):
             if not raw_url.startswith("sqlite"):
                 raise ValueError("Riot cache must use a local SQLite database.")
             return raw_url
+        if os.environ.get("VERCEL"):
+            # Serverless: only /tmp is writable, and the cache is disposable.
+            return "sqlite+aiosqlite:////tmp/lol_analyzer_cache.db"
         path = (_BACKEND_DIR / "lol_analyzer_cache.db").as_posix()
         return f"sqlite+aiosqlite:///{path}"
 

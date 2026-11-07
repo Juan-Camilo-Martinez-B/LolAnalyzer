@@ -61,15 +61,17 @@ La nube no puede leer el cliente de League (vive en `127.0.0.1` del jugador) y V
 
 ### Vercel (modo nube)
 
-`api/index.py` crea la app en modo nube y `vercel.json` envía todas las rutas allí. `.vercelignore` deja fuera `.env`, bases de datos, pruebas y el agente.
+En producción: **https://lolanalyzer-api.vercel.app** (`/health` responde `"mode": "cloud"`).
+
+Vercel detecta FastAPI y usa `app/main.py` como entrada; `APP_MODE=cloud` hace que solo se monten las rutas de nube. `.vercelignore` deja fuera `.env`, bases de datos, pruebas y el agente. En Vercel el caché de Riot es un SQLite en `/tmp` que se crea solo, y el esquema lo crean las migraciones del repositorio de BD (`INIT_DB_ON_STARTUP=false`).
 
 ```bash
-npx vercel link
+npx vercel link --yes --project lolanalyzer-api
 npx vercel env add DATABASE_URL production
-npx vercel --prod
+npx vercel deploy --prod
 ```
 
-Variables en Vercel: `DATABASE_URL` (pooler de Supabase, puerto 6543), `SECRET_KEY`, `GROQ_API_KEY`, `GROQ_MODEL`, `RIOT_API_KEY` y `ALLOWED_ORIGINS` (`app://lolanalyzer` para el escritorio, más el dominio de la web). El esquema lo crean las migraciones del repositorio de BD: en Vercel `INIT_DB_ON_STARTUP` queda en `false`, y el caché de Riot es un SQLite en `/tmp` que se crea solo.
+Variables de producción: `APP_MODE=cloud`, `DATABASE_URL` (pooler de Supabase), `SECRET_KEY` (propia de producción, distinta de la de desarrollo), `GROQ_API_KEY`, `GROQ_MODEL`, `RIOT_API_KEY`, `ALLOWED_ORIGINS` (`app://lolanalyzer` para el escritorio), `INIT_DB_ON_STARTUP=false`, `LCU_AUTO_CONNECT=false` y `DEBUG=false`.
 
 ### Agente local (PyInstaller)
 
