@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.lcu_match_map import map_lcu_game, map_lcu_history
+from app.services.lcu_match_map import is_rift_row, map_lcu_game, map_lcu_history, rift_status
 from app.services.local_match_history import save_local_matches
 from app.services.riot_lcu import RiotLCUService
 
@@ -115,6 +115,36 @@ def test_thin_list_uses_the_game_detail_payload():
     assert mapped[0]["championName"] == "Yasuo"
     assert BLOB not in json.dumps(mapped)
     assert map_lcu_game(_game(), "missing-puuid") is None
+
+
+def test_only_summoners_rift_games_are_kept():
+    aram = {**_game(), "gameId": 2, "queueId": 450, "gameMode": "ARAM", "mapId": 12}
+    urf = {**_game(), "gameId": 3, "queueId": 1900, "gameMode": "URF", "mapId": 11}
+    mapped = map_lcu_history({"games": {"games": [_game(), aram, urf]}}, PUUID)
+    assert [match["matchId"] for match in mapped] == ["5123456789"]
+
+
+def test_rift_status_waits_for_detail_on_thin_entries():
+    assert rift_status({"gameId": 1}) is None
+    assert rift_status({"queueId": 420}) is True
+    assert rift_status({"mapId": 11, "gameMode": "CLASSIC"}) is True
+    assert rift_status({"mapId": 11, "gameMode": "URF"}) is False
+    assert rift_status({"queueId": 450, "gameMode": "ARAM"}) is False
+
+
+def test_rift_row_check_matches_the_stored_shape():
+    assert is_rift_row({"queueId": 420, "gameMode": "Ranked Solo"})
+    assert is_rift_row({"queueId": 0, "gameMode": "CLASSIC"})
+    assert not is_rift_row({"queueId": 450, "gameMode": "ARAM"})
+
+
+def test_unknown_lane_stays_unknown_instead_of_mid():
+    game = _game()
+    me = game["participants"][0]
+    me["timeline"] = {"lane": "NONE", "role": "NONE"}
+    assert map_lcu_game(game, PUUID)["role"] == "UNKNOWN"
+    me["spell1Id"] = 11
+    assert map_lcu_game(game, PUUID)["role"] == "JUNGLE"
 
 
 def test_game_detail_rejects_a_non_numeric_id():

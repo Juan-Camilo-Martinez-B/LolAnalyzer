@@ -60,6 +60,7 @@ CHAMPION_NAMES = {
     62: "Wukong",
     64: "Lee Sin",
     67: "Vayne",
+    69: "Cassiopeia",
     75: "Nasus",
     77: "Udyr",
     78: "Poppy",
@@ -152,7 +153,55 @@ _LANE_ROLE = {
     ("BOTTOM", "SUPPORT"): "SUPPORT",
     ("UTILITY", "DUO_SUPPORT"): "SUPPORT",
     ("NONE", "DUO_SUPPORT"): "SUPPORT",
+    ("NONE", "SUPPORT"): "SUPPORT",
 }
+
+
+# Colas 5v5 de La Grieta del Invocador. ARAM, Arena y URF quedan fuera.
+SUMMONERS_RIFT_QUEUES = frozenset({
+    400,  # Normal Draft
+    420,  # Ranked Solo
+    430,  # Normal Blind
+    440,  # Ranked Flex
+    490,  # Quickplay
+    700,  # Clash
+})
+
+# 11 es la Grieta actual; 1 y 2 son versiones antiguas del mismo mapa.
+SUMMONERS_RIFT_MAP_IDS = frozenset({1, 2, 11})
+
+
+def rift_status(game: dict[str, Any]) -> Optional[bool]:
+    """
+    True or False when the game says where it was played.
+    None when it carries no map, queue or mode (thin history entries),
+    so the caller can load the detail before deciding.
+    """
+    current = unwrap_game(game)
+    map_id = _int(current.get("mapId"))
+    queue_id = _int(current.get("queueId"))
+    mode = str(current.get("gameMode") or "").upper()
+
+    if not (map_id or queue_id or mode):
+        return None
+    if queue_id in SUMMONERS_RIFT_QUEUES:
+        return True
+    if mode:
+        # URF and other rotating modes also use map 11, so the mode decides.
+        return mode == "CLASSIC" and (map_id == 0 or map_id in SUMMONERS_RIFT_MAP_IDS)
+    return map_id in SUMMONERS_RIFT_MAP_IDS
+
+
+def is_summoners_rift(game: dict[str, Any]) -> bool:
+    """True only when the game is known to be a Summoner's Rift match."""
+    return rift_status(game) is True
+
+
+def is_rift_row(match: dict[str, Any]) -> bool:
+    """Same check on a UI match row (`queueId` and the `gameMode` label)."""
+    queue_id = _int(match.get("queueId"))
+    mode = str(match.get("gameMode") or "").upper()
+    return queue_id in SUMMONERS_RIFT_QUEUES or mode == "CLASSIC"
 
 
 def unwrap_game(game: dict[str, Any]) -> dict[str, Any]:
@@ -197,14 +246,14 @@ def needs_detail(game: dict[str, Any]) -> bool:
 
 
 def map_lcu_history(payload: Any, puuid: str, details: Optional[dict[str, dict[str, Any]]] = None) -> list[dict[str, Any]]:
-    """Turns a current-summoner history document into UI match rows, newest first."""
+    """Turns a current-summoner history document into UI match rows (only Summoner's Rift), newest first."""
     extras = details or {}
     mapped: list[dict[str, Any]] = []
     for game in extract_games(payload):
         current = unwrap_game(game)
+        # Thin entries carry no map or queue: load the detail first, then filter.
         if needs_detail(current):
-            game_id = game_id_of(current)
-            detail = extras.get(game_id or "")
+            detail = extras.get(game_id_of(current) or "")
             if isinstance(detail, dict):
                 current = unwrap_game(detail)
         row = map_lcu_game(current, puuid)
@@ -217,6 +266,8 @@ def map_lcu_history(payload: Any, puuid: str, details: Optional[dict[str, dict[s
 def map_lcu_game(game: dict[str, Any], puuid: str) -> Optional[dict[str, Any]]:
     """One LCU game -> the same summary fields `/api/riot/matches` already returns."""
     current = unwrap_game(game)
+    if not is_summoners_rift(current):
+        return None
     participant = _local_participant(current, puuid)
     if participant is None:
         return None
@@ -297,10 +348,29 @@ def _role(participant: dict[str, Any]) -> str:
         normalized = _normalize_role(participant.get(key))
         if normalized:
             return normalized
+
+    # Smite (spellId 11) identifica al jungla cuando no hay posicion.
+    spell1 = _int(participant.get("spell1Id"))
+    spell2 = _int(participant.get("spell2Id"))
+    if spell1 == 11 or spell2 == 11:
+        return "JUNGLE"
+
     timeline = participant.get("timeline") if isinstance(participant.get("timeline"), dict) else {}
     lane = str(timeline.get("lane") or "").upper()
     role = str(timeline.get("role") or "").upper()
-    return _LANE_ROLE.get((lane, role), "UNKNOWN")
+
+    if (lane, role) in _LANE_ROLE:
+        return _LANE_ROLE[(lane, role)]
+    if lane in ("MIDDLE", "MID"):
+        return "MID"
+    if lane in ("TOP", "JUNGLE"):
+        return lane
+    if lane in ("BOTTOM", "BOT"):
+        return "SUPPORT" if "SUPPORT" in role else "ADC"
+    if "SUPPORT" in role:
+        return "SUPPORT"
+    # Sin datos suficientes no se inventa un rol.
+    return "UNKNOWN"
 
 
 def _normalize_role(raw: Any) -> Optional[str]:
