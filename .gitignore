@@ -70,3 +70,7 @@ desktop.ini
 .dmypy.json
 dmypy.json
 .ruff_cache/
+
+# PyInstaller output
+build/
+dist/
