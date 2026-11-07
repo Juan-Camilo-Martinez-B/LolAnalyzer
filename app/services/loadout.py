@@ -15,6 +15,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from app.services.matchup_plan import matchup_plan
 from app.services.opgg_meta import OpggUnavailable, opgg_champion_name, opgg_meta_client, opgg_position
 from app.services.riot_lcu import riot_lcu_service
 
@@ -199,6 +200,7 @@ async def meta_loadout(
         "summonerSpellIds": client_pages[0]["summonerSpellIds"] if client_pages else [],
         "skillOrder": [],
         "tip": None,
+        "matchupPlan": None,
         "notice": None,
     }
 
@@ -248,6 +250,9 @@ async def meta_loadout(
         "skillOrder": build["skillOrder"],
         "tip": build["tip"],
     })
+    if opponent_name:
+        # Only with a known rival, so the plan is about this exact matchup.
+        result["matchupPlan"] = await matchup_plan(champion_name, opponent_name, opgg_lane, build)
     return result
 
 

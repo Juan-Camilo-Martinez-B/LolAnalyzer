@@ -210,8 +210,14 @@ def normalize_build(data: dict[str, Any]) -> dict[str, Any]:
         "itemBlocks": blocks,
         "skillOrder": skill_order,
         "tip": tip,
-        "laneAdvantage": data.get("lane_advantage_champion") if isinstance(data.get("lane_advantage_champion"), str) else None,
+        "laneAdvantage": _text(data.get("lane_advantage_champion")),
+        "soloKillAdvantage": _text(data.get("lane_solo_kill_advantage_champion")),
+        "playStyle": _text(data.get("recommended_play_style")),
     }
+
+
+def _text(value: Any) -> Optional[str]:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 class OpggMetaClient:
