@@ -94,7 +94,11 @@ class RuneImportRequest(BaseModel):
     primary_style_id: int = Field(..., ge=8000, le=9999)
     sub_style_id: int = Field(..., ge=8000, le=9999)
     perk_ids: list[int] = Field(..., min_length=9, max_length=9)
-    summoner_spell_ids: list[int] = Field(default_factory=list, max_length=2)
+
+
+class SpellImportRequest(BaseModel):
+    # Order matters: the first spell goes on D, the second on F.
+    spell_ids: list[int] = Field(..., min_length=2, max_length=2)
 
 
 class ItemBlock(BaseModel):
@@ -149,8 +153,24 @@ async def post_rune_import(
         )
     except LoadoutError as error:
         _raise_loadout(error)
-    spells_applied = await apply_summoner_spells(body.summoner_spell_ids) if body.summoner_spell_ids else False
-    return {"imported": True, "page": page, "spellsApplied": spells_applied}
+    return {"imported": True, "page": page}
+
+
+@router.post("/loadout/spells")
+async def post_spell_import(
+    body: SpellImportRequest,
+    _current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Sets the summoner spells in champion select: spell_ids[0] on D, spell_ids[1] on F."""
+    first, second = body.spell_ids
+    if first == second or not all(0 < spell <= 100 for spell in body.spell_ids):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Elige dos hechizos distintos.")
+    if not await apply_summoner_spells(body.spell_ids):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Los hechizos solo se pueden cambiar durante la selección de campeón.",
+        )
+    return {"imported": True, "spellIds": body.spell_ids}
 
 
 @router.post("/loadout/items")

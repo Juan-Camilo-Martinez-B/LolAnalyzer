@@ -78,6 +78,8 @@ Durante la selección de campeón el escritorio pide `GET /api/champ-select/load
 - **Respuesta:** `runePages` (la página meta primero y después las del cliente como alternativa), `itemBlocks` (Inicio, Build principal y Situacionales), hechizos, orden de habilidades y consejo. Si OP.GG no responde, quedan las runas del cliente y `notice` lo explica.
 - Las respuestas de OP.GG se guardan 30 minutos en memoria (`OPGG_CACHE_MINUTES`).
 
-`POST /api/champ-select/loadout/runes` crea la página "LolAnalyzer - <campeón>" y la deja activa, con los hechizos si la selección está abierta. Reemplaza la página anterior de LolAnalyzer; nunca borra páginas del jugador. Si no hay espacio, responde 409.
+`POST /api/champ-select/loadout/runes` crea la página "LolAnalyzer - <campeón>" y la deja activa. Reemplaza la página anterior de LolAnalyzer; nunca borra páginas del jugador. Si no hay espacio, responde 409.
+
+`POST /api/champ-select/loadout/spells` recibe `spell_ids` en orden (el primero va en D y el segundo en F) y solo funciona con la selección abierta; fuera de ella responde 409. El escritorio decide el orden según la tecla de Destello que eligió el jugador.
 
 `POST /api/champ-select/loadout/items` recibe bloques (`title`, `item_ids`) y escribe el conjunto "LolAnalyzer - <campeón>" en la tienda, asociado al campeón y a La Grieta. Los objetos repetidos (dos pociones) pasan a ser una cantidad. Repetir la importación reemplaza ese conjunto.

@@ -194,6 +194,13 @@ def test_item_import_is_idempotent_counts_repeats_and_keeps_other_sets(monkeypat
     assert mine["blocks"][1]["type"] == "Build principal"
 
 
+def test_spell_import_keeps_the_requested_slot_order(fake_client):
+    assert asyncio.run(loadout.apply_summoner_spells([14, 4])) is True
+    method, path, body = fake_client.calls[-1]
+    assert (method, path) == ("PATCH", "/lol-champ-select/v1/session/my-selection")
+    assert body == {"spell1Id": 14, "spell2Id": 4}
+
+
 def _headers(client: TestClient) -> dict[str, str]:
     response = client.post(
         "/api/auth/register",
@@ -228,6 +235,10 @@ def test_loadout_routes_need_a_session_and_validate_input(fake_client, monkeypat
             headers=headers,
         )
         assert bad_items.status_code == 422
+        same = client.post("/api/champ-select/loadout/spells", json={"spell_ids": [4, 4]}, headers=headers)
+        assert same.status_code == 422
+        spells = client.post("/api/champ-select/loadout/spells", json={"spell_ids": [4, 14]}, headers=headers)
+        assert spells.status_code == 200 and spells.json()["spellIds"] == [4, 14]
         body = client.get("/api/champ-select/loadout?champion_id=777&position=MID", headers=headers).json()
         assert body["clientConnected"] is True
         assert body["runePages"][0]["source"] == "opgg"
