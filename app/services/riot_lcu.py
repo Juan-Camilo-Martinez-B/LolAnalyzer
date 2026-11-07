@@ -198,6 +198,11 @@ class RiotLCUService:
             logger.debug("LCU %s failed: %s", path, type(exc).__name__)
         return None
 
+    async def get_current_ranked_stats(self) -> Optional[Dict[str, Any]]:
+        """GET /lol-ranked/v1/current-ranked-stats"""
+        payload = await self._get_json("/lol-ranked/v1/current-ranked-stats")
+        return payload if isinstance(payload, dict) else None
+
     async def get_current_match_history(self) -> Optional[Dict[str, Any]]:
         """GET /lol-match-history/v1/products/lol/current-summoner/matches"""
         payload = await self._get_json("/lol-match-history/v1/products/lol/current-summoner/matches")

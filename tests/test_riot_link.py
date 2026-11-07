@@ -73,3 +73,48 @@ def test_matches_translate_riot_errors_without_leaking_the_key():
         assert response.status_code == 429
         assert "RGAPI" not in response.text
         assert "key" not in response.json()["detail"].lower()
+
+
+def test_connect_refuses_an_account_linked_to_another_user():
+    account = {"puuid": "puuid-shared", "gameName": "Shared", "tagLine": "LAN"}
+    with TestClient(app) as client:
+        first = _auth_headers(client)
+        second = _auth_headers(client)
+        with patch("app.api.riot.account_by_riot_id", new=AsyncMock(return_value=account)),              patch("app.api.riot.summoner_by_puuid", new=AsyncMock(return_value={})):
+            body = {"game_name": "Shared", "tag_line": "LAN", "region": "la1"}
+            assert client.post("/api/riot/connect", json=body, headers=first).status_code == 200
+            conflict = client.post("/api/riot/connect", json=body, headers=second)
+        assert conflict.status_code == 409
+        assert client.get("/api/auth/me", headers=first).json()["riot_linked"] is True
+
+
+def test_connect_ignores_a_local_client_with_another_riot_id(monkeypatch):
+    async def other_client():
+        return {"puuid": "client-puuid", "gameName": "Someone", "tagLine": "EUW"}
+
+    monkeypatch.setattr("app.api.riot._local_summoner", other_client)
+    account = {"puuid": "requested-puuid", "gameName": "Player", "tagLine": "LAN"}
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        with patch("app.api.riot.account_by_riot_id", new=AsyncMock(return_value=account)),              patch("app.api.riot.summoner_by_puuid", new=AsyncMock(return_value={})):
+            linked = client.post(
+                "/api/riot/connect",
+                json={"game_name": "Player", "tag_line": "LAN", "region": "la1"},
+                headers=headers,
+            )
+        assert linked.status_code == 200
+        assert linked.json()["puuid"] == "requested-puuid"
+
+
+def test_matches_keep_the_riot_error_when_the_key_is_rejected():
+    with TestClient(app) as client:
+        headers = _auth_headers(client)
+        with patch("app.api.riot.account_by_riot_id", new=AsyncMock(return_value={"puuid": "puuid-503", "gameName": "K", "tagLine": "L"})),              patch("app.api.riot.summoner_by_puuid", new=AsyncMock(return_value={})):
+            client.post("/api/riot/connect", json={"game_name": "K", "tag_line": "L", "region": "la1"}, headers=headers)
+        with patch(
+            "app.api.riot.recent_match_ids",
+            new=AsyncMock(side_effect=RiotUnavailable(503, "Riot API key was rejected.")),
+        ):
+            response = client.get("/api/riot/matches", headers=headers)
+        assert response.status_code == 503
+        assert response.json()["detail"]

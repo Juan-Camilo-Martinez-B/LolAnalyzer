@@ -17,7 +17,9 @@ from app.core.security import get_current_user
 from app.db.models import User
 from app.db.session import get_db
 from app.services.champion_catalog import get_champion_catalog
+from app.services.lcu_match_map import QUEUE_LABELS, is_summoners_rift
 from app.services.local_match_history import load_local_matches, save_local_matches, sync_lcu_history
+from app.services.riot_lcu import riot_lcu_service
 from app.services.riot_api import (
     PLATFORM_TO_REGION,
     RiotUnavailable,
@@ -39,21 +41,52 @@ class RiotConnectRequest(BaseModel):
     region: str = Field(default="la1", min_length=2, max_length=10)
 
 
-QUEUE_LABELS = {
-    400: "Normal Draft",
-    420: "Ranked Solo",
-    430: "Normal Blind",
-    440: "Ranked Flex",
-    450: "ARAM",
-    490: "Quickplay",
-    700: "Clash",
-    1700: "Arena",
-    1900: "URF",
-}
-
-
 def _queue_label(queue_id: int, fallback: str | None) -> str:
     return QUEUE_LABELS.get(queue_id) or fallback or "CLASSIC"
+
+
+async def _local_summoner() -> dict[str, Any] | None:
+    """Account open in the local League client, or None when it is closed."""
+    try:
+        if not await riot_lcu_service.ensure_connection():
+            return None
+        summoner = await riot_lcu_service.get_current_summoner()
+    except Exception as exc:
+        logger.debug("LCU summoner check skipped: %s", type(exc).__name__)
+        return None
+    if isinstance(summoner, dict) and summoner.get("puuid"):
+        return summoner
+    return None
+
+
+async def _local_ranked_stats() -> dict[str, Any] | None:
+    try:
+        return await riot_lcu_service.get_current_ranked_stats()
+    except Exception as exc:
+        logger.debug("LCU ranked check skipped: %s", type(exc).__name__)
+        return None
+
+
+def _same_riot_id(summoner: dict[str, Any], game_name: str, tag_line: str) -> bool:
+    local_name = str(summoner.get("gameName") or "").strip().casefold()
+    local_tag = str(summoner.get("tagLine") or "").strip().casefold()
+    return bool(local_name) and local_name == game_name.casefold() and local_tag == tag_line.casefold()
+
+
+def _solo_from_lcu(ranked_stats: dict[str, Any] | None) -> dict[str, Any] | None:
+    """LCU ranked payload -> the league-v4 shape the desktop already reads."""
+    queues = (ranked_stats or {}).get("queues") or []
+    entry = next((q for q in queues if isinstance(q, dict) and q.get("queueType") == "RANKED_SOLO_5x5"), None)
+    if not entry or not entry.get("tier"):
+        return None
+    return {
+        "tier": entry.get("tier"),
+        "rank": entry.get("division") or "I",
+        "leaguePoints": int(entry.get("leaguePoints") or 0),
+        "wins": int(entry.get("wins") or 0),
+        "losses": int(entry.get("losses") or 0),
+        "queueType": "RANKED_SOLO_5x5",
+    }
 
 
 def _role(position: str | None) -> str:
@@ -132,12 +165,29 @@ async def connect_riot(
     if platform not in PLATFORM_TO_REGION:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported region.")
 
-    try:
-        account = await account_by_riot_id(db, body.game_name.strip(), body.tag_line.strip(), platform)
-    except RiotUnavailable as error:
-        raise_riot(error)
+    game_name = body.game_name.strip()
+    tag_line = body.tag_line.strip()
+    puuid: str | None = None
+    icon_id: Any = None
 
-    puuid = account.get("puuid")
+    # 1. El cliente local solo cuenta si su Riot ID es exactamente el pedido.
+    local_summoner = await _local_summoner()
+    if local_summoner and _same_riot_id(local_summoner, game_name, tag_line):
+        puuid = local_summoner["puuid"]
+        game_name = local_summoner.get("gameName") or game_name
+        tag_line = local_summoner.get("tagLine") or tag_line
+        icon_id = local_summoner.get("profileIconId")
+
+    # 2. Si no, la API oficial de Riot resuelve el Riot ID.
+    if not puuid:
+        try:
+            account = await account_by_riot_id(db, game_name, tag_line, platform)
+        except RiotUnavailable as error:
+            raise_riot(error)
+        puuid = account.get("puuid")
+        game_name = account.get("gameName") or game_name
+        tag_line = account.get("tagLine") or tag_line
+
     if not puuid:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Riot account response did not include a puuid.")
 
@@ -145,17 +195,17 @@ async def connect_riot(
     if taken.scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That Riot account is already linked to another user.")
 
-    icon_id = None
-    try:
-        summoner = await summoner_by_puuid(db, platform, puuid)
-        icon_id = summoner.get("profileIconId")
-    except RiotUnavailable as error:
-        if error.status_code != status.HTTP_404_NOT_FOUND:
-            raise_riot(error)
+    if icon_id is None:
+        try:
+            summoner = await summoner_by_puuid(db, platform, puuid)
+            icon_id = summoner.get("profileIconId")
+        except RiotUnavailable as error:
+            if error.status_code != status.HTTP_404_NOT_FOUND:
+                raise_riot(error)
 
     current_user.riot_puuid = puuid
-    current_user.riot_game_name = account.get("gameName") or body.game_name.strip()
-    current_user.riot_tag_line = account.get("tagLine") or body.tag_line.strip()
+    current_user.riot_game_name = game_name
+    current_user.riot_tag_line = tag_line
     current_user.region = platform
     current_user.summoner_name = f"{current_user.riot_game_name}#{current_user.riot_tag_line}"
     if icon_id is not None:
@@ -189,15 +239,30 @@ async def riot_profile(
 ) -> dict[str, Any]:
     puuid = _require_link(current_user)
     platform = current_user.region or "la1"
+
+    # 1. Si el cliente abierto es la cuenta vinculada, se lee de ahi sin la API.
+    local_summoner = await _local_summoner()
+    if local_summoner and local_summoner.get("puuid") == puuid:
+        ranked_stats = await _local_ranked_stats()
+        return {
+            "puuid": puuid,
+            "gameName": current_user.riot_game_name or local_summoner.get("gameName"),
+            "tagLine": current_user.riot_tag_line or local_summoner.get("tagLine"),
+            "region": platform,
+            "summonerLevel": local_summoner.get("summonerLevel"),
+            "profileIconId": local_summoner.get("profileIconId") or current_user.summoner_icon_id,
+            "rankedSolo": _solo_from_lcu(ranked_stats),
+        }
+
+    # 2. Cliente cerrado u otra cuenta abierta: API oficial de Riot.
     ranked: list[dict[str, Any]] = []
     summoner: dict[str, Any] = {}
     try:
         summoner = await summoner_by_puuid(db, platform, puuid)
         ranked = await league_entries(db, platform, puuid)
     except RiotUnavailable as error:
-        if error.status_code == status.HTTP_404_NOT_FOUND:
-            ranked = []
-        else:
+        # 404: cuenta sin rango. 503: sin clave configurada; se muestra la cuenta sin rango.
+        if error.status_code not in (status.HTTP_404_NOT_FOUND, status.HTTP_503_SERVICE_UNAVAILABLE):
             raise_riot(error)
 
     solo = next((entry for entry in ranked if entry.get("queueType") == "RANKED_SOLO_5x5"), None)
@@ -218,8 +283,7 @@ async def riot_matches(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    puuid = _require_link(current_user)
-    platform = current_user.region or "la1"
+    # 1. Cliente local, solo si la cuenta abierta es la vinculada.
     try:
         synced = await sync_lcu_history(db, current_user, limit=count)
     except Exception as exc:
@@ -228,16 +292,24 @@ async def riot_matches(
     if synced:
         return synced[:count]
 
+    # 2. Historial archivado en local_match_history.
     stored = await load_local_matches(db, current_user.id, count)
     if stored:
         return stored
 
+    # 3. API de Riot como ultimo recurso.
+    if not current_user.riot_puuid:
+        return []
+
+    puuid = current_user.riot_puuid
+    platform = current_user.region or "la1"
     try:
         match_ids = await recent_match_ids(db, platform, puuid, count)
         matches = []
         for match_id in match_ids:
             detail = await match_detail(db, platform, match_id)
-            matches.append(_map_match(detail, puuid))
+            if is_summoners_rift(detail.get("info") or {}):
+                matches.append(_map_match(detail, puuid))
         if matches:
             try:
                 await save_local_matches(db, current_user.id, matches, source="riot")

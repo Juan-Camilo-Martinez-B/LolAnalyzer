@@ -36,3 +36,4 @@ def lcu_history_offline(monkeypatch):
         return None
 
     monkeypatch.setattr("app.api.riot.sync_lcu_history", _offline)
+    monkeypatch.setattr("app.api.riot._local_summoner", _offline)
