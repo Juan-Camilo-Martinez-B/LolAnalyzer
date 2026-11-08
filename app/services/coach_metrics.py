@@ -8,14 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CoachAdviceLog
 
+KNOWN_SOURCES = ("groq", "rules", "gemini", "heuristic")
+
 
 def summarize_advices(rows: list[CoachAdviceLog]) -> dict[str, Any]:
     counts = Counter(row.trigger_type for row in rows)
+    sources = Counter(row.source for row in rows)
     recent = rows[:12]
     return {
         "total": len(rows),
-        "fromGemini": sum(1 for row in rows if row.source == "gemini"),
-        "fromHeuristic": sum(1 for row in rows if row.source != "gemini"),
+        "bySource": {name: sources.get(name, 0) for name in KNOWN_SOURCES},
+        # Kept for desktop 1.0, which only reads these two totals.
+        "fromGemini": sources.get("gemini", 0),
+        "fromHeuristic": len(rows) - sources.get("gemini", 0),
         "byTrigger": [
             {"trigger": trigger, "count": count}
             for trigger, count in counts.most_common()
@@ -40,7 +45,7 @@ def summarize_advices(rows: list[CoachAdviceLog]) -> dict[str, Any]:
 def _stored_source(source: Any) -> str:
     """Known advisors keep their name; anything else is stored as heuristic."""
     value = str(source or "")
-    return value if value in {"gemini", "groq", "rules", "heuristic"} else "heuristic"
+    return value if value in KNOWN_SOURCES else "heuristic"
 
 
 async def record_advice(db: AsyncSession, user_id: int, advice: dict[str, Any]) -> None:

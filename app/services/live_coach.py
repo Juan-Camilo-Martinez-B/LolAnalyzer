@@ -29,12 +29,14 @@ CACHE_SECONDS = 4.0
 
 
 def _advice_source(generated_by: str) -> str:
-    label = generated_by.lower()
-    if "heuristic" in label:
+    """Maps the model that wrote a tip to the stored advisor name."""
+    label = (generated_by or "").lower()
+    if not label or "heuristic" in label:
         return "heuristic"
-    if label.startswith("llama") or "groq" in label:
-        return "groq"
-    return "gemini"
+    if label.startswith("gemini"):
+        return "gemini"
+    # Any other model name (gpt-oss, llama, ...) comes from Groq.
+    return "groq"
 
 
 class LiveCoach:
