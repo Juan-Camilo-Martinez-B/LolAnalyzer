@@ -83,6 +83,8 @@ async def get_gameflow_phase() -> Dict[str, Any]:
     """
     phase = await riot_lcu_service.get_gameflow_phase()
     return {
+        # None means the client did not answer; the string "None" is its idle phase.
+        "connected": phase is not None,
         "phase": phase or "None",
         "in_champ_select": phase == "ChampSelect",
         "in_game": phase == "InProgress",
