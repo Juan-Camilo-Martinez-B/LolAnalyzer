@@ -33,7 +33,7 @@ Las felicitaciones de jugadas salen al instante, sin esperar los 15 s entre cons
 
 Cada regla tiene su enfriamiento y hay al menos 15 s entre consejos, salvo los urgentes (vida crítica y objetivos). Los objetivos anteriores a abrir la app sirven para los temporizadores, pero no se anuncian. Tilt y caída de CS siguen en `RulesEvaluator` y se redactan con Groq si `GROQ_API_KEY` está definida (modelo por defecto `openai/gpt-oss-20b`), con Gemini como respaldo opcional y, si no, con un texto heurístico. El prompt de Groq es una sola línea de métricas con tope de 48 tokens. No se reenvía el JSON de la partida.
 
-Cada consejo trae `category` (`recall`, `death`, `objective`, `economy`, `vision`, `tilt`, `farm`), que el escritorio usa para elegir el sonido, y se guarda en `coach_advice_logs` con su fuente (`rules`, `groq`, `gemini` o `heuristic`).
+Cada consejo trae `category` (`recall`, `death`, `objective`, `economy`, `vision`, `tilt`, `farm`), que el escritorio usa para elegir el sonido, y se guarda en `coach_advice_logs` con su fuente (`rules`, `groq`, `gemini` o `heuristic`). Cualquier modelo que no sea de Gemini (por ejemplo `openai/gpt-oss-120b`) se guarda como `groq`. `GET /api/coach/metrics` devuelve `bySource` con el total por fuente; `fromGemini` y `fromHeuristic` se mantienen para la app 1.0.
 
 ## Ejecutar
 
@@ -57,7 +57,7 @@ El mismo código se despliega de tres formas según `APP_MODE`:
 
 La nube no puede leer el cliente de League (vive en `127.0.0.1` del jugador) y Vercel no guarda estado entre peticiones ni admite WebSocket. Por eso esas partes van en el agente local. El agente **no lleva claves ni la URL de la base de datos**: guarda el historial, registra los consejos y pide el plan de línea a la nube con el JWT del jugador (`/api/history/import`, `/api/coach/advice`, `/api/ai/matchup-plan`).
 
-**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Se cierra solo si el proceso de escritorio desaparece.
+**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Desde la 1.1.0 también lo exigen las rutas de solo lectura (`/api/champ-select/status`, `session`, `summoner` y `gameflow`); en modo `full` siguen abiertas para desarrollo. `gameflow` incluye `connected`, que dice si el cliente respondió, para que el escritorio sepa cuándo se abrió League. Se cierra solo si el proceso de escritorio desaparece.
 
 ### Vercel (modo nube)
 
