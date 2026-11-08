@@ -7,14 +7,14 @@ keys, so it sends history here and asks here for the AI lane plan.
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
 from app.db.models import User
 from app.db.session import get_db
-from app.services.local_match_history import save_local_matches
+from app.services.local_match_history import ClientHistory, save_local_matches, store_client_history
 from app.services.matchup_plan import matchup_plan
 
 router = APIRouter(tags=["Cloud sync"])
@@ -42,8 +42,26 @@ class ImportedMatch(BaseModel):
     damageDealt: int = Field(default=0, ge=0, le=2000000)
 
 
+class RankedSnapshot(BaseModel):
+    tier: Optional[str] = Field(default=None, max_length=20)
+    rank: Optional[str] = Field(default=None, max_length=5)
+    leaguePoints: int = Field(default=0, ge=0, le=10000)
+    wins: int = Field(default=0, ge=0, le=100000)
+    losses: int = Field(default=0, ge=0, le=100000)
+    queueType: Optional[str] = Field(default=None, max_length=30)
+
+
+class ProfileSnapshot(BaseModel):
+    gameName: Optional[str] = Field(default=None, max_length=100)
+    tagLine: Optional[str] = Field(default=None, max_length=20)
+    profileIconId: Optional[int] = Field(default=None, ge=0, le=1000000)
+    summonerLevel: Optional[int] = Field(default=None, ge=0, le=100000)
+    rankedSolo: Optional[RankedSnapshot] = None
+
+
 class HistoryImportRequest(BaseModel):
-    puuid: Optional[str] = Field(default=None, max_length=80)
+    puuid: Optional[str] = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9_\-]+$")
+    profile: Optional[ProfileSnapshot] = None
     matches: list[ImportedMatch] = Field(..., max_length=20)
 
 
@@ -69,18 +87,17 @@ async def import_history(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """
-    Stores games the local agent read from the client. Only accounts with a
-    linked Riot ID accept them, and only from that same Riot account: otherwise
-    whoever has League open would fill someone else's history.
+    Stores games the local agent read from the client, under the League
+    profile they were played with. Any League account can feed any analyzer
+    account: the dashboard keeps each profile apart.
     """
-    if not current_user.riot_puuid:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No Riot account is linked yet.")
-    if body.puuid and body.puuid != current_user.riot_puuid:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La cuenta abierta en el cliente no es la que vinculaste.",
-        )
-    await save_local_matches(db, current_user.id, [match.model_dump() for match in body.matches], source="lcu")
+    matches = [match.model_dump() for match in body.matches]
+    if body.puuid:
+        snapshot = body.profile.model_dump(exclude_none=True) if body.profile else {}
+        profile = {**snapshot, "puuid": body.puuid}
+        await store_client_history(db, current_user.id, ClientHistory(body.puuid, matches, profile))
+    else:
+        await save_local_matches(db, current_user.id, matches, source="lcu")
     return {"stored": len(body.matches)}
 
 

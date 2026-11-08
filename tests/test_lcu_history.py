@@ -175,7 +175,7 @@ def test_closed_client_returns_stored_history_without_riot(monkeypatch):
     stored = map_lcu_history({"games": {"games": [_game()]}}, PUUID)
 
     async def remember_then_close(db, user, limit=15):
-        await save_local_matches(db, user.id, stored, source="lcu")
+        await save_local_matches(db, user.id, stored, source="lcu", puuid=PUUID)
         return None
 
     monkeypatch.setattr("app.api.riot.sync_lcu_history", remember_then_close)
@@ -208,15 +208,25 @@ def test_closed_client_returns_stored_history_without_riot(monkeypatch):
     assert BLOB not in response.text
 
 
-def test_sync_skips_accounts_without_a_linked_riot_id(monkeypatch):
+def test_sync_stores_whatever_league_account_is_open(monkeypatch):
     import asyncio
     from types import SimpleNamespace
 
     from app.services import local_match_history
+    from app.services.local_match_history import ClientHistory
 
-    async def must_not_read(*_args, **_kwargs):
-        raise AssertionError("the client must not be read for an unlinked account")
+    stored = {}
 
-    monkeypatch.setattr(local_match_history, "read_lcu_history", must_not_read)
-    user = SimpleNamespace(id=1, riot_puuid=None)
-    assert asyncio.run(local_match_history.sync_lcu_history(None, user)) is None
+    async def open_client(limit=15):
+        return ClientHistory("other-puuid", [{"matchId": "1"}], {"puuid": "other-puuid", "gameName": "Alt"})
+
+    async def remember(db, user_id, history):
+        stored.update(user_id=user_id, puuid=history.puuid)
+
+    monkeypatch.setattr(local_match_history, "read_lcu_history", open_client)
+    monkeypatch.setattr(local_match_history, "store_client_history", remember)
+    # The analyzer account is not tied to one League account, linked or not.
+    user = SimpleNamespace(id=7, riot_puuid="linked-puuid")
+    history = asyncio.run(local_match_history.sync_lcu_history(None, user))
+    assert history.puuid == "other-puuid"
+    assert stored == {"user_id": 7, "puuid": "other-puuid"}

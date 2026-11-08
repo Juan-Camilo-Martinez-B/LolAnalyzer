@@ -75,7 +75,7 @@ def test_matches_translate_riot_errors_without_leaking_the_key():
         assert "key" not in response.json()["detail"].lower()
 
 
-def test_connect_refuses_an_account_linked_to_another_user():
+def test_one_riot_id_can_be_linked_to_several_accounts():
     account = {"puuid": "puuid-shared", "gameName": "Shared", "tagLine": "LAN"}
     with TestClient(app) as client:
         first = _auth_headers(client)
@@ -83,9 +83,10 @@ def test_connect_refuses_an_account_linked_to_another_user():
         with patch("app.api.riot.account_by_riot_id", new=AsyncMock(return_value=account)),              patch("app.api.riot.summoner_by_puuid", new=AsyncMock(return_value={})):
             body = {"game_name": "Shared", "tag_line": "LAN", "region": "la1"}
             assert client.post("/api/riot/connect", json=body, headers=first).status_code == 200
-            conflict = client.post("/api/riot/connect", json=body, headers=second)
-        assert conflict.status_code == 409
-        assert client.get("/api/auth/me", headers=first).json()["riot_linked"] is True
+            # Each analyzer account keeps its own analyses for the same Riot ID.
+            assert client.post("/api/riot/connect", json=body, headers=second).status_code == 200
+        for headers in (first, second):
+            assert client.get("/api/auth/me", headers=headers).json()["riot_linked"] is True
 
 
 def test_connect_ignores_a_local_client_with_another_riot_id(monkeypatch):

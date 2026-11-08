@@ -57,7 +57,8 @@ class User(Base):
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Official Riot account link. Only identifiers; match data stays on Riot's API.
-    riot_puuid: Mapped[Optional[str]] = mapped_column(String(80), unique=True, index=True, nullable=True)
+    # Not unique: one Riot ID can be linked to several analyzer accounts.
+    riot_puuid: Mapped[Optional[str]] = mapped_column(String(80), index=True, nullable=True)
     riot_game_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     riot_tag_line: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     
@@ -245,8 +246,35 @@ class LocalMatchHistory(Base):
     trinket_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="lcu")
+    # League account the game was played with; None for imported demo games.
+    riot_puuid: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
 
     user: Mapped["User"] = relationship("User")
+
+
+class RiotProfile(Base):
+    """
+    A League account seen in the client for one analyzer account. An analyzer
+    account can play on several League accounts, and the dashboard can switch
+    between them; the snapshot shows the profile while the client is closed.
+    """
+
+    __tablename__ = "riot_profiles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "puuid", name="uq_riot_profile_user_puuid"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    puuid: Mapped[str] = mapped_column(String(80), nullable=False)
+    game_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tag_line: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    profile_icon_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    summoner_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ranked_solo_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class MatchAnalysis(Base):

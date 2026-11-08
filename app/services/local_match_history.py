@@ -9,12 +9,12 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import LocalMatchHistory
+from app.db.models import LocalMatchHistory, RiotProfile, utc_now
 from app.services.lcu_match_map import (
     SUMMONERS_RIFT_QUEUES,
     extract_games,
@@ -28,6 +28,33 @@ from app.services.lcu_match_map import (
 from app.services.riot_lcu import riot_lcu_service
 
 logger = logging.getLogger("lol_analyzer.local_history")
+
+# Selector value for every League profile of the account at once.
+ALL_PROFILES = "all"
+
+
+class ClientHistory(NamedTuple):
+    """Games read from the open client and the League account they belong to."""
+
+    puuid: str
+    matches: list[dict[str, Any]]
+    profile: dict[str, Any]
+
+
+def solo_from_lcu(ranked_stats: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """LCU ranked payload -> the league-v4 shape the desktop already reads."""
+    queues = (ranked_stats or {}).get("queues") or []
+    entry = next((q for q in queues if isinstance(q, dict) and q.get("queueType") == "RANKED_SOLO_5x5"), None)
+    if not entry or not entry.get("tier"):
+        return None
+    return {
+        "tier": entry.get("tier"),
+        "rank": entry.get("division") or "I",
+        "leaguePoints": int(entry.get("leaguePoints") or 0),
+        "wins": int(entry.get("wins") or 0),
+        "losses": int(entry.get("losses") or 0),
+        "queueType": "RANKED_SOLO_5x5",
+    }
 
 
 def _played_at(match: dict[str, Any]) -> datetime:
@@ -103,6 +130,7 @@ async def save_local_matches(
     user_id: int,
     matches: list[dict[str, Any]],
     source: str = "lcu",
+    puuid: Optional[str] = None,
 ) -> None:
     """Upserts Summoner's Rift rows. Other modes are skipped, never deleted."""
     for match in matches:
@@ -122,22 +150,97 @@ async def save_local_matches(
             row = LocalMatchHistory(user_id=user_id, external_match_id=external_id[:40])
             db.add(row)
         _apply(row, match, source)
+        if puuid:
+            row.riot_puuid = puuid[:80]
     await db.commit()
 
 
-async def load_local_matches(db: AsyncSession, user_id: int, count: int) -> list[dict[str, Any]]:
-    """Stored Summoner's Rift rows, newest first. Same rule as is_rift_row."""
-    found = await db.execute(
-        select(LocalMatchHistory)
-        .where(
-            LocalMatchHistory.user_id == user_id,
-            LocalMatchHistory.queue_id.in_(SUMMONERS_RIFT_QUEUES)
-            | (LocalMatchHistory.game_mode == "CLASSIC"),
-        )
-        .order_by(LocalMatchHistory.played_at.desc())
-        .limit(count)
+async def load_local_matches(
+    db: AsyncSession, user_id: int, count: int, puuid: Optional[str] = None
+) -> list[dict[str, Any]]:
+    """
+    Stored Summoner's Rift rows, newest first. Same rule as is_rift_row.
+    With a puuid only that League profile's games; without one, every game.
+    """
+    query = select(LocalMatchHistory).where(
+        LocalMatchHistory.user_id == user_id,
+        LocalMatchHistory.queue_id.in_(SUMMONERS_RIFT_QUEUES)
+        | (LocalMatchHistory.game_mode == "CLASSIC"),
     )
+    if puuid:
+        query = query.where(LocalMatchHistory.riot_puuid == puuid)
+    found = await db.execute(query.order_by(LocalMatchHistory.played_at.desc()).limit(count))
     return [to_ui_match(row) for row in found.scalars().all()]
+
+
+def profile_view(row: RiotProfile, linked_puuid: Optional[str] = None) -> dict[str, Any]:
+    try:
+        ranked = json.loads(row.ranked_solo_json) if row.ranked_solo_json else None
+    except json.JSONDecodeError:
+        ranked = None
+    return {
+        "puuid": row.puuid,
+        "gameName": row.game_name,
+        "tagLine": row.tag_line,
+        "profileIconId": row.profile_icon_id,
+        "summonerLevel": row.summoner_level,
+        "rankedSolo": ranked if isinstance(ranked, dict) else None,
+        "lastSeenAt": row.last_seen_at.isoformat() if row.last_seen_at else None,
+        "linked": bool(linked_puuid) and row.puuid == linked_puuid,
+    }
+
+
+async def save_profile(db: AsyncSession, user_id: int, profile: dict[str, Any]) -> None:
+    """Remembers a League profile seen in the client, with its latest snapshot."""
+    puuid = str(profile.get("puuid") or "").strip()[:80]
+    if not puuid:
+        return
+    found = await db.execute(
+        select(RiotProfile).where(RiotProfile.user_id == user_id, RiotProfile.puuid == puuid)
+    )
+    row = found.scalar_one_or_none()
+    if row is None:
+        row = RiotProfile(user_id=user_id, puuid=puuid)
+        db.add(row)
+    # A partial snapshot keeps the values it does not bring.
+    if profile.get("gameName"):
+        row.game_name = str(profile["gameName"])[:100]
+    if profile.get("tagLine"):
+        row.tag_line = str(profile["tagLine"])[:20]
+    if profile.get("profileIconId") is not None:
+        row.profile_icon_id = int(profile["profileIconId"])
+    if profile.get("summonerLevel") is not None:
+        row.summoner_level = int(profile["summonerLevel"])
+    if "rankedSolo" in profile:
+        ranked = profile.get("rankedSolo")
+        row.ranked_solo_json = json.dumps(ranked) if isinstance(ranked, dict) else None
+    row.last_seen_at = utc_now()
+    await db.commit()
+
+
+async def load_profiles(db: AsyncSession, user_id: int) -> list[RiotProfile]:
+    """League profiles of the account, most recently seen first."""
+    found = await db.execute(
+        select(RiotProfile).where(RiotProfile.user_id == user_id).order_by(RiotProfile.last_seen_at.desc())
+    )
+    return list(found.scalars().all())
+
+
+async def default_profile(db: AsyncSession, user: Any) -> Optional[str]:
+    """The linked Riot ID, else the last profile opened in the client, else None (every game)."""
+    linked = getattr(user, "riot_puuid", None)
+    if linked:
+        return linked
+    profiles = await load_profiles(db, user.id)
+    return profiles[0].puuid if profiles else None
+
+
+async def store_client_history(db: AsyncSession, user_id: int, history: "ClientHistory") -> None:
+    """Saves the open client's profile and its games on the account."""
+    if history.puuid:
+        await save_profile(db, user_id, history.profile)
+    if history.matches:
+        await save_local_matches(db, user_id, history.matches, source="lcu", puuid=history.puuid or None)
 
 
 async def _fetch_details(game_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -154,11 +257,12 @@ async def _fetch_details(game_ids: list[str]) -> dict[str, dict[str, Any]]:
     return {game_id: detail for game_id, detail in fetched if isinstance(detail, dict)}
 
 
-async def read_lcu_history(limit: int = 15, linked_puuid: Optional[str] = None) -> Optional[tuple[str, list[dict[str, Any]]]]:
+async def read_lcu_history(limit: int = 15) -> Optional[ClientHistory]:
     """
-    Reads and maps the open client's recent games: (client puuid, rows).
+    Reads and maps the open client's recent games, whatever League account is
+    open: the analyzer account is not tied to one League account.
     No database access, so the local agent can use it too.
-    Returns None when the client is closed or its account differs from linked_puuid.
+    Returns None when the client is closed.
     """
     try:
         connected = await riot_lcu_service.ensure_connection()
@@ -177,11 +281,8 @@ async def read_lcu_history(limit: int = 15, linked_puuid: Optional[str] = None) 
     if payload is None:
         return None
 
-    client_puuid = summoner.get("puuid") if isinstance(summoner, dict) else None
-    if client_puuid and linked_puuid and client_puuid != linked_puuid:
-        logger.info("Local client account does not match the linked Riot account.")
-        return None
-    puuid = client_puuid or linked_puuid or ""
+    summoner = summoner if isinstance(summoner, dict) else {}
+    puuid = str(summoner.get("puuid") or "")
 
     pending_ids: list[str] = []
     for game in extract_games(payload):
@@ -194,24 +295,30 @@ async def read_lcu_history(limit: int = 15, linked_puuid: Optional[str] = None) 
             pending_ids.append(game_id)
 
     details = await _fetch_details(pending_ids)
-    return puuid, map_lcu_history(payload, puuid, details)[:limit]
+    try:
+        ranked = solo_from_lcu(await riot_lcu_service.get_current_ranked_stats())
+    except Exception as exc:
+        logger.debug("LCU ranked check skipped: %s", type(exc).__name__)
+        ranked = None
+    profile = {
+        "puuid": puuid,
+        "gameName": summoner.get("gameName"),
+        "tagLine": summoner.get("tagLine"),
+        "profileIconId": summoner.get("profileIconId"),
+        "summonerLevel": summoner.get("summonerLevel"),
+        "rankedSolo": ranked,
+    }
+    return ClientHistory(puuid, map_lcu_history(payload, puuid, details)[:limit], profile)
 
 
-async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Optional[list[dict[str, Any]]]:
+async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Optional[ClientHistory]:
     """
-    Returns mapped games when the local client answers and stores them.
-    Returns None when the account has no linked Riot ID, the client is closed
-    or the logged-in account differs from the linked one. It never links or
-    unlinks accounts.
+    Stores the open client's profile and games on the account (full mode,
+    where the backend runs next to the client). Returns None when the client
+    is closed. It never links or unlinks a Riot ID.
     """
-    linked_puuid = getattr(user, "riot_puuid", None)
-    if not linked_puuid:
-        # Without a linked Riot ID the open client may belong to anyone.
+    history = await read_lcu_history(limit)
+    if history is None:
         return None
-    result = await read_lcu_history(limit, linked_puuid)
-    if result is None:
-        return None
-    _puuid, mapped = result
-    if mapped:
-        await save_local_matches(db, user.id, mapped, source="lcu")
-    return mapped
+    await store_client_history(db, user.id, history)
+    return history

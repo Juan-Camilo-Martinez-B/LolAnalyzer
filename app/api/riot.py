@@ -10,7 +10,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
@@ -18,7 +17,16 @@ from app.db.models import User
 from app.db.session import get_db
 from app.services.champion_catalog import get_champion_catalog
 from app.services.lcu_match_map import QUEUE_LABELS, is_summoners_rift
-from app.services.local_match_history import load_local_matches, save_local_matches, sync_lcu_history
+from app.services.local_match_history import (
+    ALL_PROFILES,
+    default_profile,
+    load_local_matches,
+    load_profiles,
+    profile_view,
+    save_local_matches,
+    solo_from_lcu,
+    sync_lcu_history,
+)
 from app.services.riot_lcu import riot_lcu_service
 from app.services.riot_api import (
     PLATFORM_TO_REGION,
@@ -73,20 +81,8 @@ def _same_riot_id(summoner: dict[str, Any], game_name: str, tag_line: str) -> bo
     return bool(local_name) and local_name == game_name.casefold() and local_tag == tag_line.casefold()
 
 
-def _solo_from_lcu(ranked_stats: dict[str, Any] | None) -> dict[str, Any] | None:
-    """LCU ranked payload -> the league-v4 shape the desktop already reads."""
-    queues = (ranked_stats or {}).get("queues") or []
-    entry = next((q for q in queues if isinstance(q, dict) and q.get("queueType") == "RANKED_SOLO_5x5"), None)
-    if not entry or not entry.get("tier"):
-        return None
-    return {
-        "tier": entry.get("tier"),
-        "rank": entry.get("division") or "I",
-        "leaguePoints": int(entry.get("leaguePoints") or 0),
-        "wins": int(entry.get("wins") or 0),
-        "losses": int(entry.get("losses") or 0),
-        "queueType": "RANKED_SOLO_5x5",
-    }
+# Kept under its old name for local_bridge.
+_solo_from_lcu = solo_from_lcu
 
 
 def _role(position: str | None) -> str:
@@ -191,9 +187,7 @@ async def connect_riot(
     if not puuid:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Riot account response did not include a puuid.")
 
-    taken = await db.execute(select(User).where(User.riot_puuid == puuid, User.id != current_user.id))
-    if taken.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That Riot account is already linked to another user.")
+    # One Riot ID can be linked to several analyzer accounts; each keeps its own analyses.
 
     if icon_id is None:
         try:
@@ -277,28 +271,56 @@ async def riot_profile(
     }
 
 
+ProfileQuery = Query(
+    default=None,
+    max_length=80,
+    pattern=r"^[A-Za-z0-9_\-]+$",
+    description="puuid of one League profile, 'all' for every game, or empty for the default profile.",
+)
+
+
+@router.get("/profiles")
+async def riot_profiles(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """League profiles seen in the client for this account, and the one shown by default."""
+    rows = await load_profiles(db, current_user.id)
+    return {
+        "profiles": [profile_view(row, current_user.riot_puuid) for row in rows],
+        "default": await default_profile(db, current_user),
+        "linked": current_user.riot_puuid,
+    }
+
+
+async def _selected_profile(db: AsyncSession, user: User, profile: str | None) -> str | None:
+    """None means every game of the account."""
+    if profile == ALL_PROFILES:
+        return None
+    return profile or await default_profile(db, user)
+
+
 @router.get("/matches")
 async def riot_matches(
     count: int = Query(default=10, ge=1, le=20),
+    profile: str | None = ProfileQuery,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    # 1. Cliente local, solo si la cuenta abierta es la vinculada.
+    # 1. Cliente local (modo full): guarda el perfil abierto y sus partidas.
     try:
-        synced = await sync_lcu_history(db, current_user, limit=count)
+        await sync_lcu_history(db, current_user, limit=count)
     except Exception as exc:
         logger.info("Local history sync failed: %s", type(exc).__name__)
-        synced = None
-    if synced:
-        return synced[:count]
 
-    # 2. Historial archivado en local_match_history.
-    stored = await load_local_matches(db, current_user.id, count)
+    # 2. Historial archivado del perfil elegido.
+    selected = await _selected_profile(db, current_user, profile)
+    stored = await load_local_matches(db, current_user.id, count, puuid=selected)
     if stored:
         return stored
 
-    # 3. API de Riot como ultimo recurso.
-    if not current_user.riot_puuid:
+    # 3. API de Riot como ultimo recurso, solo para el Riot ID vinculado.
+    if not current_user.riot_puuid or selected != current_user.riot_puuid:
         return []
 
     puuid = current_user.riot_puuid
@@ -312,7 +334,7 @@ async def riot_matches(
                 matches.append(_map_match(detail, puuid))
         if matches:
             try:
-                await save_local_matches(db, current_user.id, matches, source="riot")
+                await save_local_matches(db, current_user.id, matches, source="riot", puuid=puuid)
             except Exception as exc:
                 logger.info("Could not archive Riot matches: %s", type(exc).__name__)
         return matches
@@ -322,10 +344,11 @@ async def riot_matches(
 
 @router.get("/stats")
 async def riot_stats(
+    profile: str | None = ProfileQuery,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    matches = await riot_matches(count=10, current_user=current_user, db=db)
+    matches = await riot_matches(count=10, profile=profile, current_user=current_user, db=db)
     games = len(matches)
     if games == 0:
         return {

@@ -29,21 +29,27 @@ async def sync_history(
     db: AsyncSession = Depends(get_db),
     forward_token: Optional[str] = Depends(bearer_token),
 ) -> dict[str, Any]:
-    """Copies the client's recent Summoner's Rift games to the account."""
+    """
+    Copies the open client's profile and recent Summoner's Rift games to the
+    account, whatever League account is open. Returns that profile's puuid so
+    the desktop can follow it.
+    """
     if player is not None:
-        rows = await sync_lcu_history(db, player, limit=SYNC_LIMIT)
-        return {"clientConnected": rows is not None, "synced": len(rows or [])}
-
-    result = await read_lcu_history(SYNC_LIMIT)
-    if result is None:
-        return {"clientConnected": False, "synced": 0}
-    puuid, rows = result
-    if rows:
-        try:
-            await cloud_post("/api/history/import", forward_token, {"puuid": puuid or None, "matches": rows})
-        except CloudUnavailable as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    return {"clientConnected": True, "synced": len(rows)}
+        history = await sync_lcu_history(db, player, limit=SYNC_LIMIT)
+    else:
+        history = await read_lcu_history(SYNC_LIMIT)
+        if history is not None and history.puuid:
+            try:
+                await cloud_post("/api/history/import", forward_token, {
+                    "puuid": history.puuid,
+                    "profile": history.profile,
+                    "matches": history.matches,
+                })
+            except CloudUnavailable as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    if history is None:
+        return {"clientConnected": False, "synced": 0, "puuid": None}
+    return {"clientConnected": True, "synced": len(history.matches), "puuid": history.puuid or None}
 
 
 @router.get("/profile")

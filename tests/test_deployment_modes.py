@@ -63,8 +63,14 @@ def test_local_history_sync_forwards_to_the_cloud_with_the_player_token(monkeypa
     monkeypatch.setattr(settings, "AGENT_TOKEN", "launch-token")
     sent = {}
 
-    async def fake_read(limit=15, linked_puuid=None):
-        return "client-puuid", [{"matchId": "55", "queueId": 420, "gameMode": "Ranked Solo"}]
+    async def fake_read(limit=15):
+        from app.services.local_match_history import ClientHistory
+
+        return ClientHistory(
+            "client-puuid",
+            [{"matchId": "55", "queueId": 420, "gameMode": "Ranked Solo"}],
+            {"puuid": "client-puuid", "gameName": "Alt", "tagLine": "LAN"},
+        )
 
     async def fake_post(path, token, payload):
         sent.update(path=path, token=token, payload=payload)
@@ -77,9 +83,10 @@ def test_local_history_sync_forwards_to_the_cloud_with_the_player_token(monkeypa
             "/api/local/history/sync",
             headers={"X-Agent-Token": "launch-token", "Authorization": "Bearer player-jwt"},
         )
-    assert response.json() == {"clientConnected": True, "synced": 1}
+    assert response.json() == {"clientConnected": True, "synced": 1, "puuid": "client-puuid"}
     assert sent["path"] == "/api/history/import" and sent["token"] == "player-jwt"
     assert sent["payload"]["puuid"] == "client-puuid"
+    assert sent["payload"]["profile"]["gameName"] == "Alt"
 
 
 def test_local_lane_plan_comes_from_the_cloud(monkeypatch):
@@ -128,20 +135,44 @@ def _link_riot(headers: dict[str, str], client: TestClient, puuid: str) -> None:
     asyncio.run(write())
 
 
-def test_cloud_history_import_stores_games_and_refuses_another_account():
-    match = {"matchId": "g1", "queueId": 420, "gameMode": "Ranked Solo", "championName": "Yone", "durationSec": 1700}
+def test_cloud_history_keeps_each_league_profile_apart():
+    def game(match_id: str) -> dict:
+        return {"matchId": match_id, "queueId": 420, "gameMode": "Ranked Solo", "championName": "Yone", "durationSec": 1700}
+
     with TestClient(create_app("cloud")) as client:
         headers = _headers(client)
-        # Without a linked Riot ID, whoever has League open could fill this history.
-        unlinked = client.post("/api/history/import", json={"puuid": "p1", "matches": [match]}, headers=headers)
-        assert unlinked.status_code == 409
+        # An unlinked account takes games from any League account open in the client.
+        first = client.post("/api/history/import", headers=headers, json={
+            "puuid": "p1", "profile": {"gameName": "Main", "tagLine": "LAN", "summonerLevel": 30}, "matches": [game("g1")],
+        })
+        assert first.json() == {"stored": 1}
+        second = client.post("/api/history/import", headers=headers, json={
+            "puuid": "p2", "profile": {"gameName": "Alt", "tagLine": "LAN"}, "matches": [game("g2"), game("g3")],
+        })
+        assert second.json() == {"stored": 2}
+
+        listed = client.get("/api/riot/profiles", headers=headers).json()
+        assert [row["gameName"] for row in listed["profiles"]] == ["Alt", "Main"]
+        # Without a link the dashboard follows the last profile opened.
+        assert listed["default"] == "p2"
+        ids = lambda query: {row["matchId"] for row in client.get(f"/api/riot/matches{query}", headers=headers).json()}
+        assert ids("") == {"g2", "g3"}
+        assert ids("?profile=p1") == {"g1"}
+        assert ids("?profile=all") == {"g1", "g2", "g3"}
+        assert client.get("/api/riot/stats?profile=p1", headers=headers).json()["gamesAnalyzed"] == 1
+
+        # A linked Riot ID becomes the default, the other profile stays available.
         _link_riot(headers, client, "p1")
-        stored = client.post("/api/history/import", json={"puuid": "p1", "matches": [match]}, headers=headers)
-        assert stored.json() == {"stored": 1}
-        other = client.post("/api/history/import", json={"puuid": "p2", "matches": [match]}, headers=headers)
-        assert other.status_code == 409
-        bad = client.post("/api/history/import", json={"matches": [{**match, "matchId": "../x"}]}, headers=headers)
+        assert client.get("/api/riot/profiles", headers=headers).json()["default"] == "p1"
+        assert ids("") == {"g1"}
+
+        bad = client.post("/api/history/import", json={"matches": [{**game("x"), "matchId": "../x"}]}, headers=headers)
         assert bad.status_code == 422
+
+
+def test_cloud_lane_plan_answers_the_agent():
+    with TestClient(create_app("cloud")) as client:
+        headers = _headers(client)
         plan = client.post(
             "/api/ai/matchup-plan",
             json={"champion": "Yone", "opponent": "Ahri", "lane": "mid", "facts": {"laneAdvantage": "Ahri"}},
