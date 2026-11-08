@@ -302,3 +302,29 @@ class MatchAnalysis(Base):
     focus: Mapped[str] = mapped_column(String(300), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="rules")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class MatchupReport(Base):
+    """
+    Lane plan the player received in champion select, kept on the account so it
+    can be read again later. One row per matchup; a repeat refreshes it.
+    """
+
+    __tablename__ = "matchup_reports"
+    __table_args__ = (
+        UniqueConstraint("user_id", "champion", "opponent", "lane", name="uq_matchup_report_user_matchup"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    champion: Mapped[str] = mapped_column(String(40), nullable=False)
+    opponent: Mapped[str] = mapped_column(String(40), nullable=False)
+    lane: Mapped[str] = mapped_column(String(12), nullable=False)
+    plan_lane: Mapped[str] = mapped_column(String(400), nullable=False)
+    plan_fight: Mapped[str] = mapped_column(String(400), nullable=False)
+    plan_avoid: Mapped[str] = mapped_column(String(400), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="rules")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

@@ -142,6 +142,9 @@ def test_analysis_routes_store_one_analysis_per_game(monkeypatch):
         again = client.post(f"/api/analysis/{match_id}", headers=headers).json()
         assert again["createdAt"] == latest["createdAt"]
         assert client.get(f"/api/analysis/{match_id}", headers=headers).json()["focus"] == latest["focus"]
+        # The reports view lists every stored analysis once.
+        listed = client.get("/api/analysis", headers=headers).json()
+        assert [row["matchId"] for row in listed] == [match_id]
 
         assert client.get("/api/analysis/unknown", headers=headers).status_code == 404
         assert client.post("/api/analysis/../etc", headers=headers).status_code in (404, 405, 422)

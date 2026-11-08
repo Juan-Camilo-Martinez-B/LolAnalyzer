@@ -16,6 +16,7 @@ from app.db.models import User
 from app.db.session import get_db
 from app.services.local_match_history import ClientHistory, save_local_matches, store_client_history
 from app.services.matchup_plan import matchup_plan
+from app.services.matchup_reports import list_matchup_reports, save_matchup_report
 
 router = APIRouter(tags=["Cloud sync"])
 
@@ -104,8 +105,20 @@ async def import_history(
 @router.post("/api/ai/matchup-plan")
 async def ai_matchup_plan(
     body: MatchupPlanRequest,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
-    """Lane plan with Groq for the local agent, cached per matchup."""
+    """Lane plan with Groq for the local agent, cached per matchup and kept on the account."""
     facts = body.facts.model_dump()
-    return await matchup_plan(body.champion, body.opponent, body.lane, facts)
+    plan = await matchup_plan(body.champion, body.opponent, body.lane, facts)
+    await save_matchup_report(db, current_user.id, body.champion, body.opponent, body.lane, plan)
+    return plan
+
+
+@router.get("/api/ai/matchup-plans")
+async def ai_matchup_plans(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Lane plans this account received in champion select, newest first."""
+    return await list_matchup_reports(db, current_user.id)

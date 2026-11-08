@@ -15,6 +15,7 @@ from app.services.match_analysis import (
     analyze_match,
     latest_finished_match,
     owned_match,
+    stored_analyses,
     stored_analysis,
 )
 
@@ -44,6 +45,15 @@ async def analyze_latest(
         return {"analysis": None}
     row = await analyze_match(db, current_user.id, match)
     return {"analysis": analysis_view(row)}
+
+
+@router.get("")
+async def list_analyses(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Every post-match report of the account, newest first."""
+    return [analysis_view(row) for row in await stored_analyses(db, current_user.id)]
 
 
 @router.get("/{match_id}")

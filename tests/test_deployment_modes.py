@@ -179,6 +179,16 @@ def test_cloud_lane_plan_answers_the_agent():
             headers=headers,
         )
         assert plan.status_code == 200 and "Ahri" in plan.json()["lane"]
+        # The plan stays on the account; asking again refreshes it instead of adding a row.
+        client.post(
+            "/api/ai/matchup-plan",
+            json={"champion": "Yone", "opponent": "Ahri", "lane": "mid", "facts": {}},
+            headers=headers,
+        )
+        reports = client.get("/api/ai/matchup-plans", headers=headers).json()
+        assert len(reports) == 1
+        assert reports[0]["champion"] == "Yone" and reports[0]["opponent"] == "Ahri"
+        assert reports[0]["plan"]["lane"]
 
 
 def test_local_agent_guards_read_only_client_routes(monkeypatch):

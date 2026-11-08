@@ -188,6 +188,17 @@ def analysis_view(row: MatchAnalysis) -> dict[str, Any]:
     }
 
 
+async def stored_analyses(db: AsyncSession, user_id: int, limit: int = 30) -> list[MatchAnalysis]:
+    """The account's post-match reports, newest first."""
+    found = await db.execute(
+        select(MatchAnalysis)
+        .where(MatchAnalysis.user_id == user_id)
+        .order_by(MatchAnalysis.created_at.desc())
+        .limit(limit)
+    )
+    return list(found.scalars().all())
+
+
 async def stored_analysis(db: AsyncSession, user_id: int, match_id: str) -> Optional[MatchAnalysis]:
     found = await db.execute(
         select(MatchAnalysis).where(MatchAnalysis.user_id == user_id, MatchAnalysis.external_match_id == match_id)
