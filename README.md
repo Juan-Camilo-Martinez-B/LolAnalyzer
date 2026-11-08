@@ -57,7 +57,7 @@ El mismo código se despliega de tres formas según `APP_MODE`:
 
 La nube no puede leer el cliente de League (vive en `127.0.0.1` del jugador) y Vercel no guarda estado entre peticiones ni admite WebSocket. Por eso esas partes van en el agente local. El agente **no lleva claves ni la URL de la base de datos**: guarda el historial, registra los consejos y pide el plan de línea a la nube con el JWT del jugador (`/api/history/import`, `/api/coach/advice`, `/api/ai/matchup-plan`).
 
-**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Desde la 1.1.0 también lo exigen las rutas de solo lectura (`/api/champ-select/status`, `session`, `summoner` y `gameflow`); en modo `full` siguen abiertas para desarrollo. `POST /api/history/import` solo acepta partidas en cuentas con Riot ID vinculado y del mismo puuid (409 si no), así quien tenga League abierto no llena el historial de otra cuenta. `gameflow` incluye `connected`, que dice si el cliente respondió, para que el escritorio sepa cuándo se abrió League. Se cierra solo si el proceso de escritorio desaparece.
+**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Desde la 1.1.0 también lo exigen las rutas de solo lectura (`/api/champ-select/status`, `session`, `summoner` y `gameflow`); en modo `full` siguen abiertas para desarrollo. `POST /api/history/import` acepta partidas de cualquier cuenta de League abierta en el cliente: las guarda con su `puuid` y guarda el perfil (`profile`: nombre, nivel, icono y rango) en `riot_profiles`. `gameflow` incluye `connected`, que dice si el cliente respondió, para que el escritorio sepa cuándo se abrió League. Se cierra solo si el proceso de escritorio desaparece.
 
 ### Vercel (modo nube)
 
@@ -115,7 +115,7 @@ Riot Sign On (RSO) es el login oficial del jugador, pero Riot solo lo entrega a 
 
 Las contraseñas y las respuestas de recuperación se guardan con Bcrypt. Tras 5 fallos hay un bloqueo de 15 minutos. Cambiar la contraseña invalida los JWT anteriores (`session_version`).
 
-Las partidas se leen primero del cliente de League (`/lol-match-history/v1/products/lol/current-summoner/matches` y, si hace falta el detalle, `/lol-match-history/v1/games/{gameId}`), con el lockfile del cliente y solo contra `127.0.0.1`. El resumen se guarda en `local_match_history`. Si el cliente está cerrado, `GET /api/riot/matches` devuelve esa tabla. La API de Riot (`match-v5`) solo se usa cuando no hay archivo local; si además falta o caducó la clave, la ruta responde el error de Riot de siempre. `riot_cache` sigue siendo un caché corto y `match_records` no se toca.
+Las partidas se leen primero del cliente de League (`/lol-match-history/v1/products/lol/current-summoner/matches` y, si hace falta el detalle, `/lol-match-history/v1/games/{gameId}`), con el lockfile del cliente y solo contra `127.0.0.1`. El resumen se guarda en `local_match_history`. Si el cliente está cerrado, `GET /api/riot/matches` devuelve esa tabla. Cada fila guarda el `riot_puuid` de la cuenta de League con la que se jugó: una cuenta de LolAnalyzer puede tener varios perfiles. `GET /api/riot/profiles` los lista con `default` (el Riot ID vinculado o, sin vínculo, el último perfil abierto); `matches` y `stats` aceptan `?profile=<puuid>` o `?profile=all`. Un mismo Riot ID puede vincularse a varias cuentas (ya no hay índice único en `users.riot_puuid`). Los planes de línea que pide el agente quedan en `matchup_reports` (uno por matchup y cuenta) y se listan en `GET /api/ai/matchup-plans`. La API de Riot (`match-v5`) solo se usa cuando no hay archivo local; si además falta o caducó la clave, la ruta responde el error de Riot de siempre. `riot_cache` sigue siendo un caché corto y `match_records` no se toca.
 
 Solo se guardan y se muestran partidas de La Grieta del Invocador (colas 400, 420, 430, 440, 490 y 700, o modo `CLASSIC`). ARAM, Arena y URF se omiten sin borrar filas. `GET /api/riot/profile` lee nivel y rango del cliente abierto solo si su cuenta es la vinculada; si no, usa la API de Riot. El cliente nunca vincula ni desvincula cuentas por su cuenta: `POST /api/riot/connect` lo usa solo cuando el Riot ID pedido coincide, y un Riot ID que ya tiene otro usuario responde 409.
 
@@ -127,7 +127,7 @@ Al terminar cada partida el escritorio llama a `POST /api/analysis/latest`. El b
 - Groq solo redacta tres frases (`strengths`, `improvements`, `focus`) a partir de una línea con esas métricas: unos 280 tokens de entrada y 220 de salida. Sin clave o si falla, las mismas tres frases salen de reglas (`source: "rules"`).
 - Se guarda en `match_analyses` con clave única por usuario y partida, así cada partida se analiza y se cobra una sola vez.
 
-`GET /api/analysis/{match_id}` devuelve el análisis guardado (404 si no hay) y `POST /api/analysis/{match_id}` analiza una partida antigua a pedido.
+`GET /api/analysis` lista todos los análisis de la cuenta (más nuevos primero). `GET /api/analysis/{match_id}` devuelve el análisis guardado (404 si no hay) y `POST /api/analysis/{match_id}` analiza una partida antigua a pedido.
 
 ## Runas y objetos
 
