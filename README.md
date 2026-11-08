@@ -73,6 +73,15 @@ npx vercel deploy --prod
 
 Variables de producción: `APP_MODE=cloud`, `DATABASE_URL` (pooler de Supabase), `SECRET_KEY` (propia de producción, distinta de la de desarrollo), `GROQ_API_KEY`, `GROQ_MODEL`, `RIOT_API_KEY`, `ALLOWED_ORIGINS` (`app://lolanalyzer` para el escritorio), `INIT_DB_ON_STARTUP=false`, `LCU_AUTO_CONNECT=false` y `DEBUG=false`.
 
+**Cambios de esquema.** Como Vercel no crea ni altera tablas al arrancar, una versión con tablas o columnas nuevas se despliega en dos pasos: primero se aplica el esquema en Supabase y después se despliega la API. Desde esta carpeta, con `DATABASE_URL` de Supabase en `.env`:
+
+```bash
+python -c "import asyncio; from app.db.session import init_db; asyncio.run(init_db())"
+npx vercel deploy --prod
+```
+
+`init_db` crea las tablas que falten y `app/db/schema_compat.py` agrega columnas e índices nuevos de forma idempotente (las migraciones Alembic del repositorio de BD describen los mismos cambios). Si se despliega la API antes, las rutas que leen las columnas nuevas responden 500 hasta aplicar el esquema.
+
 ### Agente local (PyInstaller)
 
 ```bash
