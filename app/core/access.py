@@ -34,6 +34,12 @@ def check_agent_token(value: Optional[str]) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Agente local no autorizado.")
 
 
+def require_local_agent(x_agent_token: Optional[str] = Header(default=None)) -> None:
+    """Read-only client data: the agent token in local mode, open in full mode (development)."""
+    if settings.mode == "local":
+        check_agent_token(x_agent_token)
+
+
 async def require_player(
     token: Optional[str] = Depends(oauth2_scheme),
     x_agent_token: Optional[str] = Header(default=None),

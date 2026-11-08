@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from app.core.access import bearer_token, require_player
+from app.core.access import bearer_token, require_local_agent, require_player
 from app.db.models import User
 from app.services.loadout import (
     LoadoutError,
@@ -27,7 +27,7 @@ logger = logging.getLogger("lol_analyzer.champ_select")
 router = APIRouter(prefix="/api/champ-select", tags=["Champion Select"])
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_local_agent)])
 async def get_lcu_status() -> Dict[str, Any]:
     """
     Returns current LCU connection status, port, and lockfile discovery.
@@ -41,7 +41,7 @@ async def get_lcu_status() -> Dict[str, Any]:
     }
 
 
-@router.get("/session")
+@router.get("/session", dependencies=[Depends(require_local_agent)])
 async def get_champ_select_session() -> Dict[str, Any]:
     """
     Returns active Champion Select session from the local League Client.
@@ -62,7 +62,7 @@ async def get_champ_select_session() -> Dict[str, Any]:
     }
 
 
-@router.get("/summoner")
+@router.get("/summoner", dependencies=[Depends(require_local_agent)])
 async def get_current_summoner() -> Dict[str, Any]:
     """
     Returns active logged-in summoner profile information.
@@ -76,7 +76,7 @@ async def get_current_summoner() -> Dict[str, Any]:
     return summoner
 
 
-@router.get("/gameflow")
+@router.get("/gameflow", dependencies=[Depends(require_local_agent)])
 async def get_gameflow_phase() -> Dict[str, Any]:
     """
     Returns current Gameflow phase (e.g., 'ChampSelect', 'InProgress', 'Lobby', 'None').

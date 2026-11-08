@@ -125,3 +125,19 @@ def test_cloud_history_import_stores_games_and_refuses_another_account():
             headers=headers,
         )
         assert plan.status_code == 200 and "Ahri" in plan.json()["lane"]
+
+
+def test_local_agent_guards_read_only_client_routes(monkeypatch):
+    monkeypatch.setattr(settings, "APP_MODE", "local")
+    monkeypatch.setattr(settings, "AGENT_TOKEN", "launch-token")
+
+    async def closed_client():
+        return None
+
+    monkeypatch.setattr("app.api.champ_select.riot_lcu_service.get_gameflow_phase", closed_client)
+    with TestClient(create_app("local")) as client:
+        for path in ("status", "session", "summoner", "gameflow"):
+            assert client.get(f"/api/champ-select/{path}").status_code == 401
+        ok = client.get("/api/champ-select/gameflow", headers={"X-Agent-Token": "launch-token"})
+        assert ok.status_code == 200
+        assert ok.json() == {"connected": False, "phase": "None", "in_champ_select": False, "in_game": False}
