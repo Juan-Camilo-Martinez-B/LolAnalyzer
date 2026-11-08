@@ -200,10 +200,15 @@ async def read_lcu_history(limit: int = 15, linked_puuid: Optional[str] = None) 
 async def sync_lcu_history(db: AsyncSession, user: Any, limit: int = 15) -> Optional[list[dict[str, Any]]]:
     """
     Returns mapped games when the local client answers and stores them.
-    Returns None when the client is closed or the logged-in account differs
-    from the linked one. It never links or unlinks accounts.
+    Returns None when the account has no linked Riot ID, the client is closed
+    or the logged-in account differs from the linked one. It never links or
+    unlinks accounts.
     """
-    result = await read_lcu_history(limit, getattr(user, "riot_puuid", None))
+    linked_puuid = getattr(user, "riot_puuid", None)
+    if not linked_puuid:
+        # Without a linked Riot ID the open client may belong to anyone.
+        return None
+    result = await read_lcu_history(limit, linked_puuid)
     if result is None:
         return None
     _puuid, mapped = result

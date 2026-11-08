@@ -57,7 +57,7 @@ El mismo código se despliega de tres formas según `APP_MODE`:
 
 La nube no puede leer el cliente de League (vive en `127.0.0.1` del jugador) y Vercel no guarda estado entre peticiones ni admite WebSocket. Por eso esas partes van en el agente local. El agente **no lleva claves ni la URL de la base de datos**: guarda el historial, registra los consejos y pide el plan de línea a la nube con el JWT del jugador (`/api/history/import`, `/api/coach/advice`, `/api/ai/matchup-plan`).
 
-**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Desde la 1.1.0 también lo exigen las rutas de solo lectura (`/api/champ-select/status`, `session`, `summoner` y `gameflow`); en modo `full` siguen abiertas para desarrollo. `gameflow` incluye `connected`, que dice si el cliente respondió, para que el escritorio sepa cuándo se abrió League. Se cierra solo si el proceso de escritorio desaparece.
+**Seguridad del agente.** Escucha solo en `127.0.0.1` y exige `X-Agent-Token`, un token aleatorio que Electron genera en cada arranque; una página web abierta en el navegador no lo conoce. Desde la 1.1.0 también lo exigen las rutas de solo lectura (`/api/champ-select/status`, `session`, `summoner` y `gameflow`); en modo `full` siguen abiertas para desarrollo. `POST /api/history/import` solo acepta partidas en cuentas con Riot ID vinculado y del mismo puuid (409 si no), así quien tenga League abierto no llena el historial de otra cuenta. `gameflow` incluye `connected`, que dice si el cliente respondió, para que el escritorio sepa cuándo se abrió League. Se cierra solo si el proceso de escritorio desaparece.
 
 ### Vercel (modo nube)
 

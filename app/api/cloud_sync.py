@@ -68,8 +68,14 @@ async def import_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Stores games the local agent read from the client. A different linked account is refused."""
-    if body.puuid and current_user.riot_puuid and body.puuid != current_user.riot_puuid:
+    """
+    Stores games the local agent read from the client. Only accounts with a
+    linked Riot ID accept them, and only from that same Riot account: otherwise
+    whoever has League open would fill someone else's history.
+    """
+    if not current_user.riot_puuid:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No Riot account is linked yet.")
+    if body.puuid and body.puuid != current_user.riot_puuid:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="La cuenta abierta en el cliente no es la que vinculaste.",

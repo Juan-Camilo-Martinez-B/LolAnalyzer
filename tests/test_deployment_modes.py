@@ -111,12 +111,35 @@ def _headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def _link_riot(headers: dict[str, str], client: TestClient, puuid: str) -> None:
+    """Links a Riot account straight in the database (the real link calls the Riot API)."""
+    from sqlalchemy import update
+
+    from app.db.models import User
+    from app.db.session import AsyncSessionLocal
+
+    user_id = client.get("/api/auth/me", headers=headers).json()["id"]
+
+    async def write() -> None:
+        async with AsyncSessionLocal() as db:
+            await db.execute(update(User).where(User.id == user_id).values(riot_puuid=puuid))
+            await db.commit()
+
+    asyncio.run(write())
+
+
 def test_cloud_history_import_stores_games_and_refuses_another_account():
     match = {"matchId": "g1", "queueId": 420, "gameMode": "Ranked Solo", "championName": "Yone", "durationSec": 1700}
     with TestClient(create_app("cloud")) as client:
         headers = _headers(client)
+        # Without a linked Riot ID, whoever has League open could fill this history.
+        unlinked = client.post("/api/history/import", json={"puuid": "p1", "matches": [match]}, headers=headers)
+        assert unlinked.status_code == 409
+        _link_riot(headers, client, "p1")
         stored = client.post("/api/history/import", json={"puuid": "p1", "matches": [match]}, headers=headers)
         assert stored.json() == {"stored": 1}
+        other = client.post("/api/history/import", json={"puuid": "p2", "matches": [match]}, headers=headers)
+        assert other.status_code == 409
         bad = client.post("/api/history/import", json={"matches": [{**match, "matchId": "../x"}]}, headers=headers)
         assert bad.status_code == 422
         plan = client.post(

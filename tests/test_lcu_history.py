@@ -206,3 +206,17 @@ def test_closed_client_returns_stored_history_without_riot(monkeypatch):
     assert body[0]["kda"] == 7.0
     assert body[0]["csPerMin"] == 6.0
     assert BLOB not in response.text
+
+
+def test_sync_skips_accounts_without_a_linked_riot_id(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.services import local_match_history
+
+    async def must_not_read(*_args, **_kwargs):
+        raise AssertionError("the client must not be read for an unlinked account")
+
+    monkeypatch.setattr(local_match_history, "read_lcu_history", must_not_read)
+    user = SimpleNamespace(id=1, riot_puuid=None)
+    assert asyncio.run(local_match_history.sync_lcu_history(None, user)) is None
